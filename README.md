@@ -1,8 +1,8 @@
 # LocalAITools - 本地 AI 工具箱
 
-一套调用本地大模型（兼容 OpenAI API）的实用工具集合，涵盖图片处理、文本处理、性能测试。支持 **LM Studio / Ollama / vLLM / 云端 API**。
+一套调用本地大模型（兼容 OpenAI API）的实用工具集合，涵盖图片处理、文本处理、知识库问答、性能测试。支持 **LM Studio / Ollama / vLLM / 云端 API**。
 
-- **图形界面**：一行命令启动 Web UI，自动打开浏览器，无需敲代码
+- **图形界面**：双击或一行命令启动 Web UI，自动打开浏览器，无需敲代码
 - **命令行**：每个工具也可独立运行，方便脚本集成
 - **统一配置**：所有工具的 API 地址、模型名称、参数集中在 `.env` 文件中管理
 
@@ -10,15 +10,14 @@
 
 ## 工具一览
 
-| 工具 | 功能 | 说明 |
+| 工具 | 文件 | 说明 |
 |------|------|------|
-| 图片重命名 | `image_tools/rename_images.py` | 视觉模型理解图片内容，自动生成中文短句文件名 |
-| 质量检测 | `image_tools/detect_ai_errors.py` | 四维度 AI 评分（真实感/艺术性/细节/清晰度） |
-| 重新分类 | `image_tools/reclassify_by_txt.py` | 基于评分 txt 将图片分入高质量/低质量子文件夹 |
-| 截图识别 | `image_tools/explain_images_txt.py` | 聊天记录长截图切片后 VLM 逐条识别输出文字 |
-| 文本精简 | `text_tools/explain_txt.py` | 超长聊天记录 txt 合并冗余时间戳，输出紧凑格式 |
+| 图片重命名 | `image_tools/rename_images.py` | VLM 理解图片内容，自动生成中文短句文件名 |
+| 质量评分与分类 | `image_tools/detect_ai_errors.py` | 四维度 AI 评分 + 自动按比例分入高/低质量子文件夹 |
+| 截图 OCR | `image_tools/ocr_chat_screenshots.py` | 聊天记录长截图切片后 VLM 逐条识别输出文字 |
+| 聊天压缩 | `text_tools/compress_chat.py` | 超长聊天记录 txt 合并冗余时间戳，输出紧凑格式 |
 | 文本翻译 | `text_tools/translate.py` | 长篇小说按章节切分翻译，支持断点续传 |
-| 章节摘要 | `text_tools/chapter_summary.py` | FAISS + BM25 混合检索，多轮迭代问答 |
+| 知识库问答 | `text_tools/chapter_summary.py` | FAISS + BM25 混合检索，多轮迭代问答 |
 | 性能压测 | `benchmarks/speedtest.py` | LLM 吞吐量测试，TTFT/ITTL 统计，绘制折线图 |
 
 ---
@@ -66,20 +65,20 @@ python app.py
 # 图片 AI 重命名
 python image_tools/rename_images.py -i data/images -w 4
 
-# 图片质量检测
+# 图片质量评分与分类（评分 + 自动分拣，一步完成）
 python image_tools/detect_ai_errors.py data/images
 
-# 按评分重新分类
-python image_tools/reclassify_by_txt.py data/images
-
 # 聊天截图 → 文字
-python image_tools/explain_images_txt.py -i data/screenshots
+python image_tools/ocr_chat_screenshots.py -i data/screenshots
 
-# 聊天记录精简
-python text_tools/explain_txt.py -i data/screenshots/texts
+# 聊天记录压缩
+python text_tools/compress_chat.py -i data/screenshots/texts
 
 # 长篇翻译
 python text_tools/translate.py -i data/texts/novel.txt -w 4
+
+# 知识库问答（需预先构建 FAISS 索引）
+python text_tools/chapter_summary.py "你的问题" "可选关键词"
 
 # API 性能压测
 python benchmarks/speedtest.py --url http://localhost:1234/v1 --model qwen3.6-35b
@@ -106,11 +105,11 @@ LocalAITools/
 │
 ├── outputs/                # 默认输出目录
 │   ├── translation/        #   翻译输出 + 进度
-│   ├── summaries/          #   章节摘要
+│   ├── summaries/          #   知识库问答输出
 │   └── benchmarks/         #   压测结果 + 图表
 │
 ├── image_tools/            # 图片处理工具
-├── text_tools/             # 文本处理工具
+├── text_tools/             # 文本处理 & 知识库工具
 └── benchmarks/             # 性能测试
 ```
 
@@ -150,10 +149,8 @@ RETRY_TIMES=2
 # 1. 截图放到 data/images
 # 2. AI 重命名
 python image_tools/rename_images.py -i data/images
-# 3. 质量检测
+# 3. 质量评分 + 自动分拣（一步完成）
 python image_tools/detect_ai_errors.py data/images
-# 4. 按质量分拣
-python image_tools/reclassify_by_txt.py data/images
 ```
 
 ### 整理聊天记录
@@ -161,7 +158,7 @@ python image_tools/reclassify_by_txt.py data/images
 ```bash
 # 1. 长截图放到 data/screenshots
 # 2. OCR 提取文字
-python image_tools/explain_images_txt.py -i data/screenshots
+python image_tools/ocr_chat_screenshots.py -i data/screenshots
 # 3. 精简格式
-python text_tools/explain_txt.py -i data/screenshots/texts
+python text_tools/compress_chat.py -i data/screenshots/texts
 ```

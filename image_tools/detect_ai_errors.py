@@ -218,8 +218,8 @@ def process_and_classify(target_dir: str):
 
     scored.sort(key=lambda x: x[1], reverse=True)
     N = len(scored)
-    top_count = max(1, int(N * 0.0)) if N > 0 else 0
-    bottom_count = max(1, int(N * 0.0)) if N > 0 else 0
+    top_count = max(1, int(N * config.TOP_PERCENT)) if N > 0 else 0
+    bottom_count = max(1, int(N * config.BOTTOM_PERCENT)) if N > 0 else 0
 
     top_paths = set(p for p, _ in scored[:top_count])
     bottom_paths = set(p for p, _ in scored[-bottom_count:] if bottom_count > 0)

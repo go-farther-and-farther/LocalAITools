@@ -1,100 +1,87 @@
 import os
 import sys
 from pathlib import Path
-from langchain_core.prompts import PromptTemplate
+from typing import List, Optional
+
 import jieba
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 import config
 
-from typing import List
+from langchain_core.prompts import PromptTemplate
 from rank_bm25 import BM25Okapi
 from langchain_community.vectorstores import FAISS
 from langchain_openai import ChatOpenAI
 from langchain_huggingface import HuggingFaceEmbeddings
-from contextlib import redirect_stdout
-from datetime import datetime
 
-# ================== 准备工作：加载向量库 & 构建 BM25 ==================
-model_path = config.EMBEDDING_MODEL_PATH if config.EMBEDDING_MODEL_PATH else "BAAI/bge-small-zh-v1.5"
+# ---- lazy singletons ----
+_embeddings = None
+_vector = None
+_bm25 = None
+_all_docs: List = []
+_all_texts: List[str] = []
 
-embeddings = HuggingFaceEmbeddings(
-    model_name=model_path,
-    model_kwargs={'device': 'cpu'},
-    encode_kwargs={'normalize_embeddings': True},
-    cache_folder=str(config.DATA_DIR / "models")
-)
 
-vector = FAISS.load_local(config.FAISS_INDEX_PATH, embeddings, allow_dangerous_deserialization=True)
+def _init_kb():
+    global _embeddings, _vector, _bm25, _all_docs, _all_texts
+    if _vector is not None:
+        return
 
-all_docs = list(vector.docstore._dict.values())
-all_texts = [doc.page_content for doc in all_docs]
-tokenized_corpus = [list(jieba.cut(text)) for text in all_texts]
-bm25 = BM25Okapi(tokenized_corpus)
+    model_path = config.EMBEDDING_MODEL_PATH or "BAAI/bge-small-zh-v1.5"
+    _embeddings = HuggingFaceEmbeddings(
+        model_name=model_path,
+        model_kwargs={'device': 'cpu'},
+        encode_kwargs={'normalize_embeddings': True},
+        cache_folder=str(config.DATA_DIR / "models"),
+    )
+    _vector = FAISS.load_local(
+        config.FAISS_INDEX_PATH, _embeddings, allow_dangerous_deserialization=True
+    )
+    _all_docs = list(_vector.docstore._dict.values())
+    _all_texts = [doc.page_content for doc in _all_docs]
+    tokenized_corpus = [list(jieba.cut(text)) for text in _all_texts]
+    _bm25 = BM25Okapi(tokenized_corpus)
 
-print(f"✅ BM25 索引已构建，共 {len(all_texts)} 个文档块。")
 
-def normalize_scores(scores: List[float]) -> List[float]:
-    """Min-Max 归一化"""
-    min_score = min(scores)
-    max_score = max(scores)
-    if max_score == min_score:
+def _normalize_scores(scores: List[float]) -> List[float]:
+    mn, mx = min(scores), max(scores)
+    if mx == mn:
         return [1.0] * len(scores)
-    return [(s - min_score) / (max_score - min_score) for s in scores]
+    return [(s - mn) / (mx - mn) for s in scores]
 
-def hybrid_retrieve(query: str, k: int = 50, vector_weight: float = 1, bm25_weight: float = 1) -> List:
-    """
-    混合检索，返回加权排序后的 Document 列表
-    """
-    # 1. 向量检索
-    vector_results_with_scores = vector.similarity_search_with_score(query, k=k*2)
-    vector_docs = [doc for doc, _ in vector_results_with_scores]
-    vector_scores = [1 / (1 + score) for _, score in vector_results_with_scores]
 
-    # 2. BM25 检索
-    tokenized_query = list(jieba.cut(query))
-    bm25_raw_scores = bm25.get_scores(tokenized_query)
-    top_bm25_indices = np.argsort(bm25_raw_scores)[::-1][:k*2]
-    bm25_docs = [all_docs[i] for i in top_bm25_indices]
-    bm25_scores = [bm25_raw_scores[i] for i in top_bm25_indices]
+def _hybrid_retrieve(
+    query: str, k: int = 50, vector_weight: float = 1, bm25_weight: float = 1
+) -> List:
+    _init_kb()
+    # vector
+    vec_results = _vector.similarity_search_with_score(query, k=k * 2)
+    vec_docs = [doc for doc, _ in vec_results]
+    vec_scores = [1 / (1 + score) for _, score in vec_results]
+    # bm25
+    tokenized = list(jieba.cut(query))
+    bm25_raw = _bm25.get_scores(tokenized)
+    top_bm25_idx = np.argsort(bm25_raw)[::-1][: k * 2]
+    bm25_docs = [_all_docs[i] for i in top_bm25_idx]
+    bm25_scores = [bm25_raw[i] for i in top_bm25_idx]
+    # merge
+    nvec = _normalize_scores(vec_scores)
+    nbm25 = _normalize_scores(bm25_scores)
+    score_map: dict = {}
+    for doc, s in zip(vec_docs, nvec):
+        c = doc.page_content
+        entry = score_map.setdefault(c, {"doc": doc, "score": 0.0})
+        entry["score"] += s * vector_weight
+    for doc, s in zip(bm25_docs, nbm25):
+        c = doc.page_content
+        entry = score_map.setdefault(c, {"doc": doc, "score": 0.0})
+        entry["score"] += s * bm25_weight
+    sorted_items = sorted(score_map.values(), key=lambda x: x["score"], reverse=True)
+    return [it["doc"] for it in sorted_items[:k]]
 
-    # 3. 归一化
-    norm_vector_scores = normalize_scores(vector_scores)
-    norm_bm25_scores = normalize_scores(bm25_scores)
 
-    # 4. 加权合并
-    doc_score_map = {}
-    for doc, score in zip(vector_docs, norm_vector_scores):
-        content = doc.page_content
-        weighted = score * vector_weight
-        if content not in doc_score_map:
-            doc_score_map[content] = {"doc": doc, "score": weighted}
-        else:
-            doc_score_map[content]["score"] += weighted
-
-    for doc, score in zip(bm25_docs, norm_bm25_scores):
-        content = doc.page_content
-        weighted = score * bm25_weight
-        if content not in doc_score_map:
-            doc_score_map[content] = {"doc": doc, "score": weighted}
-        else:
-            doc_score_map[content]["score"] += weighted
-
-    sorted_items = sorted(doc_score_map.values(), key=lambda x: x["score"], reverse=True)
-    return [item["doc"] for item in sorted_items[:k]]
-
-# ================== 定义 LLM ==================
-llm = ChatOpenAI(
-    model=config.TEXT_MODEL,
-    streaming=True,
-    base_url=config.OPENAI_BASE_URL,
-    api_key=config.OPENAI_API_KEY
-)
-
-# ================== 定义两套 Prompt 模板 ==================
-# 第一轮模板（无历史答案）
-prompt_template_round1 = """
+PROMPT_R1 = """
 你是一个问答机器人。
 你的任务是根据下述给定的已知信息详细地回答用户问题。
 确保你的回复完全依据下述已知信息。不要编造答案。
@@ -109,8 +96,7 @@ prompt_template_round1 = """
 请用中文回答用户问题。
 """
 
-# 第二轮及以后模板（含上一轮答案）
-prompt_template_roundN = """
+PROMPT_RN = """
 你是一个问答机器人。
 你的任务是根据下述给定的已知信息，并结合之前你已经给出的分析结果，进一步详细、准确地回答用户问题。
 请仔细参考上一轮你的回答，利用新增的已知信息进行补充、修正或深化。
@@ -129,69 +115,79 @@ prompt_template_roundN = """
 请用中文回答用户问题。
 """
 
-# ================== 主流程：分批迭代回答 ==================
-query = "白雨珺有哪些朋友？"
-keyword = "白雨珺"
 
-# 1. 混合检索获取 300 个片段（用于分成三批）
-all_retrieved_docs = hybrid_retrieve(query, k=50)
-print(f"📚 混合检索共获取 {len(all_retrieved_docs)} 个文档片段")
+def query_knowledge_base(
+    query: str,
+    keyword: str = "",
+    model: Optional[str] = None,
+    k: int = 50,
+    batch_size: int = 20,
+    vector_weight: float = 1.0,
+    bm25_weight: float = 1.0,
+    progress_callback=None,
+) -> str:
+    """混合检索 + 多轮迭代回答。progress_callback(msg: str) 用于推送进度。"""
+    _init_kb()
 
-# 2. 过滤包含关键词的文档（可选，确保相关性）
-filtered_docs = [doc for doc in all_retrieved_docs if keyword in doc.page_content]
-print(f"🎯 其中包含「{keyword}」的片段数：{len(filtered_docs)}")
+    def _log(msg: str):
+        if progress_callback:
+            progress_callback(msg)
 
-# 3. 按每批 100 个进行切片
-batch_size = 20
-batches = [filtered_docs[i:i+batch_size] for i in range(0, len(filtered_docs), batch_size)]
-# if len(batches) > 3:
-#     batches = batches[:3]   # 只取前三批（保证正好三次迭代）
-print(f"🔁 将分 {len(batches)} 轮进行迭代处理，每批最多 {batch_size} 个片段")
+    _log(f"混合检索中... (共 {len(_all_texts)} 个文档块)")
+    docs = _hybrid_retrieve(query, k=k, vector_weight=vector_weight, bm25_weight=bm25_weight)
+    _log(f"检索到 {len(docs)} 个片段")
 
-# 4. 存储每轮的回答
-answers = []
+    if keyword.strip():
+        docs = [d for d in docs if keyword.strip() in d.page_content]
+        _log(f"关键词「{keyword}」过滤后剩余 {len(docs)} 个片段")
 
-# 5. 迭代处理每一批
-for round_idx, batch_docs in enumerate(batches, start=1):
-    print(f"\n{'='*50}")
-    print(f"第 {round_idx} 轮处理，当前批次文档数：{len(batch_docs)}")
+    if not docs:
+        return "未找到相关文档片段，请调整查询或关键词。"
 
-    # 将本批文档内容拼接为字符串（每个片段之间用换行分隔）
-    info_text = "\n\n".join([doc.page_content for doc in batch_docs])
+    batches = [docs[i:i + batch_size] for i in range(0, len(docs), batch_size)]
+    _log(f"分 {len(batches)} 轮迭代处理")
 
-    if round_idx == 1:
-        # 第一轮：使用基础模板
-        prompt = PromptTemplate.from_template(prompt_template_round1).format(
-            info=info_text,
-            question=query
-        )
-    else:
-        # 后续轮次：将上一轮的回答作为重要参考
-        previous = answers[-1]  # 上一轮的完整回答
-        prompt = PromptTemplate.from_template(prompt_template_roundN).format(
-            previous_answer=previous,
-            info=info_text,
-            question=query
-        )
+    llm = ChatOpenAI(
+        model=model or config.TEXT_MODEL,
+        streaming=True,
+        base_url=config.OPENAI_BASE_URL,
+        api_key=config.OPENAI_API_KEY,
+    )
 
-    # 调用 LLM
-    response = llm.invoke(prompt)
-    answer = response.content
-    answers.append(answer)
+    answers: List[str] = []
+    for round_idx, batch in enumerate(batches, start=1):
+        info_text = "\n\n".join(d.page_content for d in batch)
+        if round_idx == 1:
+            prompt = PromptTemplate.from_template(PROMPT_R1).format(
+                info=info_text, question=query
+            )
+        else:
+            prompt = PromptTemplate.from_template(PROMPT_RN).format(
+                previous_answer=answers[-1], info=info_text, question=query
+            )
+        _log(f"第 {round_idx}/{len(batches)} 轮 LLM 调用...")
+        answers.append(llm.invoke(prompt).content)
 
-    print(f"✅ 第 {round_idx} 轮回答生成完毕")
-    print(f"📝 回答预览（前300字）：\n{answer[:300]}...")
+    # assemble output
+    lines = [f"## 最终回答\n\n{answers[-1]}"]
+    if len(answers) > 1:
+        lines.append("\n---\n## 各轮迭代记录")
+        for i, ans in enumerate(answers, 1):
+            lines.append(f"\n### 第 {i} 轮\n{ans[:500]}{'...' if len(ans) > 500 else ''}")
+    return "\n\n".join(lines)
 
-# ================== 输出最终三个版本 ==================
-print("\n" + "="*50)
-print("📌 多轮迭代回答汇总：")
-for i, ans in enumerate(answers, 1):
-    print(f"\n--- 版本 {i} ---")
-    print(ans)
 
-output_dir = str(config.OUTPUT_DIR / "summaries")
-os.makedirs(output_dir, exist_ok=True)
-filename = os.path.join(output_dir, f"output_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
+# ==================== CLI ====================
+if __name__ == "__main__":
+    result = query_knowledge_base(
+        query=sys.argv[1] if len(sys.argv) > 1 else "白雨珺有哪些朋友？",
+        keyword=sys.argv[2] if len(sys.argv) > 2 else "白雨珺",
+    )
+    print(result)
+    out_dir = config.OUTPUT_DIR / "summaries"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    from datetime import datetime
 
-# 提示保存成功（不写入文件，而是输出到控制台）
-print(f"✅ 内容已保存至：{filename}", file=sys.stderr)
+    fname = out_dir / f"kb_answer_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    fname.write_text(result, encoding="utf-8")
+    print(f"\n已保存至: {fname}")

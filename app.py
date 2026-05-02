@@ -2,12 +2,15 @@
 # -*- coding: utf-8 -*-
 """
 LocalAITools - Gradio Web 界面
-启动方式：python app.py
+启动方式：python app.py  或  双击 run.bat
 然后浏览器打开 http://localhost:7860
 """
 
 import sys
+import io
+import logging
 from pathlib import Path
+from contextlib import redirect_stdout
 
 sys.path.insert(0, str(Path(__file__).parent))
 import config
@@ -19,6 +22,21 @@ def _make_title(text):
     return f"## {text}"
 
 
+def _capture_log(fn, *args, **kwargs):
+    """捕获 logging 输出为字符串"""
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setLevel(logging.INFO)
+    handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s', datefmt='%H:%M:%S'))
+    root = logging.getLogger()
+    root.addHandler(handler)
+    try:
+        fn(*args, **kwargs)
+    finally:
+        root.removeHandler(handler)
+    return stream.getvalue() or "✅ 处理完成"
+
+
 # ============================================================
 # Tab 1: 图片重命名
 # ============================================================
@@ -26,7 +44,6 @@ def _rename_images(input_dir, model, workers, dry_run):
     from image_tools.rename_images import process_one_image, get_shared_llm
     from collections import deque
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    import os
 
     input_path = Path(input_dir)
     if not input_path.is_dir():
@@ -61,57 +78,18 @@ def _rename_images(input_dir, model, workers, dry_run):
 
 
 # ============================================================
-# Tab 2: 图片质量检测
+# Tab 2: 图片质量评分与分类（合并原 Tab 2 + Tab 3）
 # ============================================================
-def _detect_errors(input_dir):
+def _detect_and_classify(input_dir):
     from image_tools.detect_ai_errors import process_and_classify
-    import io
-    import logging
-
-    log_stream = io.StringIO()
-    handler = logging.StreamHandler(log_stream)
-    handler.setLevel(logging.INFO)
-    handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s', datefmt='%H:%M:%S'))
-    logging.getLogger().addHandler(handler)
-
-    try:
-        process_and_classify(input_dir)
-    finally:
-        logging.getLogger().removeHandler(handler)
-
-    return log_stream.getvalue() or "✅ 处理完成"
+    return _capture_log(process_and_classify, input_dir)
 
 
 # ============================================================
-# Tab 3: 图片重新分类
-# ============================================================
-def _reclassify(input_dir):
-    from image_tools.reclassify_by_txt import process_directory
-    import io
-    import logging
-
-    log_stream = io.StringIO()
-    handler = logging.StreamHandler(log_stream)
-    handler.setLevel(logging.INFO)
-    handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s', datefmt='%H:%M:%S'))
-    logging.getLogger().addHandler(handler)
-
-    try:
-        process_directory(input_dir)
-    finally:
-        logging.getLogger().removeHandler(handler)
-
-    return log_stream.getvalue() or "✅ 重新分类完成"
-
-
-# ============================================================
-# Tab 4: 聊天截图识别
+# Tab 3: 聊天截图识别
 # ============================================================
 def _explain_images(input_dir, vision_model, temperature, workers, internal_workers, max_tokens):
-    from image_tools.explain_images_txt import process_folder
-    import io
-    import sys as _sys
-    from contextlib import redirect_stdout
+    from image_tools.ocr_chat_screenshots import process_folder
 
     input_path = Path(input_dir)
     if not input_path.is_dir():
@@ -136,12 +114,10 @@ def _explain_images(input_dir, vision_model, temperature, workers, internal_work
 
 
 # ============================================================
-# Tab 5: 聊天记录压缩
+# Tab 4: 聊天记录压缩
 # ============================================================
 def _compress_text(input_path, model, temperature, chunk_size, internal_workers, max_tokens):
-    from text_tools.explain_txt import process_single_text_file, process_folder
-    import io
-    from contextlib import redirect_stdout
+    from text_tools.compress_chat import process_single_text_file, process_folder
 
     p = Path(input_path)
     buf = io.StringIO()
@@ -165,7 +141,7 @@ def _compress_text(input_path, model, temperature, chunk_size, internal_workers,
 
 
 # ============================================================
-# Tab 6: 文本翻译
+# Tab 5: 文本翻译
 # ============================================================
 def _translate(input_file, output_file, model, batch_size, workers):
     from text_tools.translate import translate_book_parallel
@@ -175,9 +151,6 @@ def _translate(input_file, output_file, model, batch_size, workers):
 
     output_file = output_file or str(config.OUTPUT_DIR / "translation" / "translation.txt")
     Path(output_file).parent.mkdir(parents=True, exist_ok=True)
-
-    import io
-    from contextlib import redirect_stdout
 
     buf = io.StringIO()
     with redirect_stdout(buf):
@@ -192,12 +165,37 @@ def _translate(input_file, output_file, model, batch_size, workers):
 
 
 # ============================================================
+# Tab 6: 知识库问答
+# ============================================================
+def _query_kb(query, keyword, model, k, batch_size):
+    from text_tools.chapter_summary import query_knowledge_base
+
+    if not query.strip():
+        return "❌ 请输入查询问题"
+
+    progress_lines = []
+
+    def on_progress(msg: str):
+        progress_lines.append(msg)
+
+    answer = query_knowledge_base(
+        query=query,
+        keyword=keyword,
+        model=model or None,
+        k=int(k),
+        batch_size=int(batch_size),
+        progress_callback=on_progress,
+    )
+
+    progress_text = "\n".join(f"⏳ {l}" for l in progress_lines)
+    return f"{progress_text}\n\n{answer}"
+
+
+# ============================================================
 # Tab 7: LLM 压测
 # ============================================================
 def _benchmark(url, model, api_key, concurrency, timeout, output_tokens, lengths_str):
     from benchmarks.speedtest import run_benchmark
-    import io
-    from contextlib import redirect_stdout
 
     if lengths_str.strip():
         lengths = [int(x.strip()) for x in lengths_str.split(",")]
@@ -222,8 +220,6 @@ def _benchmark(url, model, api_key, concurrency, timeout, output_tokens, lengths
         )
 
     text_output = buf.getvalue()
-
-    # Return text + plot image
     plot_path = Path(save_plot)
     if plot_path.exists():
         return text_output, str(plot_path)
@@ -255,25 +251,16 @@ def build_ui():
                     rn_output = gr.Textbox(label="处理结果", lines=15, elem_classes="output-text")
             rn_btn.click(_rename_images, [rn_input, rn_model, rn_workers, rn_dry], [rn_output])
 
-        with gr.Tab("🔍 图片质量检测"):
-            gr.Markdown(_make_title("AI 图片质量评分 — 自动评分 + 错误检测"))
+        with gr.Tab("🔍 图片质量评分与分类"):
+            gr.Markdown(_make_title("AI 评分 + 自动分拣 — 四维度评估，高分/低分图片自动归类"))
+            gr.Markdown("评分后自动将前 5% 移入 `HighQuality/`，后 5% 及错误图片移入 `LowQuality_Errors/`")
             with gr.Row():
                 with gr.Column(scale=2):
                     de_input = gr.Textbox(label="图片文件夹", value=str(config.DATA_DIR / "images"))
-                    de_btn = gr.Button("开始检测", variant="primary")
+                    de_btn = gr.Button("开始评分分类", variant="primary")
                 with gr.Column(scale=3):
                     de_output = gr.Textbox(label="处理日志", lines=15, elem_classes="output-text")
-            de_btn.click(_detect_errors, [de_input], [de_output])
-
-        with gr.Tab("📂 图片重新分类"):
-            gr.Markdown(_make_title("按评分重新分类图片 — 将高质量/低质量图片分入子文件夹"))
-            with gr.Row():
-                with gr.Column(scale=2):
-                    rc_input = gr.Textbox(label="图片文件夹", value=str(config.DATA_DIR / "images"))
-                    rc_btn = gr.Button("开始分类", variant="primary")
-                with gr.Column(scale=3):
-                    rc_output = gr.Textbox(label="处理日志", lines=15, elem_classes="output-text")
-            rc_btn.click(_reclassify, [rc_input], [rc_output])
+            de_btn.click(_detect_and_classify, [de_input], [de_output])
 
         with gr.Tab("💬 聊天截图识别"):
             gr.Markdown(_make_title("聊天记录长截图 → 文字提取 — 切片 + VLM 识别"))
@@ -318,6 +305,21 @@ def build_ui():
                 with gr.Column(scale=3):
                     tr_output = gr.Textbox(label="翻译日志", lines=15, elem_classes="output-text")
             tr_btn.click(_translate, [tr_input, tr_output_file, tr_model, tr_batch, tr_workers], [tr_output])
+
+        with gr.Tab("📚 知识库问答"):
+            gr.Markdown(_make_title("RAG 知识库问答 — FAISS + BM25 混合检索，多轮迭代回答"))
+            gr.Markdown("需要预先构建 FAISS 索引（路径见 `.env` 中的 `FAISS_INDEX_PATH`）")
+            with gr.Row():
+                with gr.Column(scale=2):
+                    kb_query = gr.Textbox(label="查询问题", placeholder="输入你想问的问题...", lines=2)
+                    kb_keyword = gr.Textbox(label="关键词过滤（可选）", placeholder="留空则不按关键词过滤", value="")
+                    kb_model = gr.Textbox(label="模型名称", value=config.TEXT_MODEL)
+                    kb_k = gr.Slider(10, 200, value=50, step=10, label="检索片段数")
+                    kb_batch = gr.Slider(5, 50, value=20, step=5, label="每批处理数")
+                    kb_btn = gr.Button("开始查询", variant="primary")
+                with gr.Column(scale=3):
+                    kb_output = gr.Textbox(label="回答结果", lines=18, elem_classes="output-text")
+            kb_btn.click(_query_kb, [kb_query, kb_keyword, kb_model, kb_k, kb_batch], [kb_output])
 
         with gr.Tab("⚡ LLM 压测"):
             gr.Markdown(_make_title("LLM 吞吐量压测 — 测试 API 性能并生成图表"))

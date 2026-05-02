@@ -38,7 +38,7 @@ REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "300"))
 REQUEST_TIMEOUT_SHORT = int(os.getenv("REQUEST_TIMEOUT_SHORT", "60"))
 
 # ==================== 图片处理参数 ====================
-# explain_images_txt 切片参数
+# ocr_chat_screenshots 切片参数
 SLICE_HEIGHT = int(os.getenv("SLICE_HEIGHT", "2000"))
 OVERLAP = int(os.getenv("OVERLAP", "400"))
 
