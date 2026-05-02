@@ -63,6 +63,9 @@ MAX_CONTEXT_TOKENS = int(os.getenv("MAX_CONTEXT_TOKENS", "30000"))
 SOURCE_LANG = os.getenv("SOURCE_LANG", "Chinese")
 TARGET_LANG = os.getenv("TARGET_LANG", "English")
 
+# ==================== 更新设置 ====================
+AUTO_UPDATE = os.getenv("AUTO_UPDATE", "true").lower() == "true"
+
 # ==================== 目录路径 ====================
 # 项目根目录
 ROOT_DIR = Path(__file__).parent.absolute()

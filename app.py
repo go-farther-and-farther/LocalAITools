@@ -9,6 +9,7 @@ LocalAITools - Gradio Web 界面
 import sys
 import io
 import logging
+import subprocess
 from pathlib import Path
 from contextlib import redirect_stdout
 
@@ -16,6 +17,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 import config
 
 import gradio as gr
+
+ROOT_DIR = Path(__file__).parent
 
 
 def _make_title(text):
@@ -265,6 +268,9 @@ SETTINGS_SCHEMA = [
         ("SOURCE_LANG", "翻译源语言", "Chinese", "text"),
         ("TARGET_LANG", "翻译目标语言", "English", "text"),
     ]),
+    ("🔄 更新", [
+        ("AUTO_UPDATE", "启动时自动检查更新", "true", "bool"),
+    ]),
     ("📂 目录与索引", [
         ("DATA_DIR", "数据输入目录", "data", "text"),
         ("OUTPUT_DIR", "输出目录", "outputs", "text"),
@@ -323,6 +329,66 @@ def _save_env(updates: dict) -> str:
     except Exception as e:
         return f"❌ 保存失败: {e}"
 
+
+def _get_current_version():
+    """获取当前版本号"""
+    try:
+        r = subprocess.run(
+            ["git", "describe", "--tags", "--always"],
+            cwd=ROOT_DIR, capture_output=True, text=True, timeout=10
+        )
+        if r.returncode == 0:
+            return r.stdout.strip()
+    except Exception:
+        pass
+    return "unknown"
+
+def _check_update():
+    """检查远程是否有更新，返回 (has_update, local, remote)"""
+    try:
+        subprocess.run(
+            ["git", "fetch", "origin"],
+            cwd=ROOT_DIR, capture_output=True, text=True, timeout=30
+        )
+        local = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=ROOT_DIR, capture_output=True, text=True, timeout=10
+        ).stdout.strip()
+        remote = subprocess.run(
+            ["git", "rev-parse", "origin/main"],
+            cwd=ROOT_DIR, capture_output=True, text=True, timeout=10
+        ).stdout.strip()
+        return local != remote, local[:8], remote[:8]
+    except Exception as e:
+        return None, None, None
+
+def _do_update():
+    """执行 git pull 更新，返回结果文本"""
+    try:
+        ver_before = _get_current_version()
+        r = subprocess.run(
+            ["git", "pull", "origin", "main"],
+            cwd=ROOT_DIR, capture_output=True, text=True, timeout=60
+        )
+        if r.returncode != 0:
+            return f"❌ 更新失败:\n{r.stderr}"
+        ver_after = _get_current_version()
+        if r.stdout.strip() == "Already up to date.":
+            return f"✅ 已是最新版本 ({ver_after})"
+        return f"✅ 更新成功!\n\n{ver_before} → {ver_after}\n\n```\n{r.stdout}\n```\n\n⚠️ 部分功能需重启应用才能生效。"
+    except Exception as e:
+        return f"❌ 更新出错: {e}"
+
+def _check_and_update_on_startup():
+    """启动时自动检查更新（如果开启了 AUTO_UPDATE）"""
+    if not config.AUTO_UPDATE:
+        return None
+    has_update, local, remote = _check_update()
+    if has_update:
+        return f"📢 发现新版本! 本地: {local} → 远程: {remote}，正在自动更新...\n{_do_update()}"
+    elif has_update is False:
+        return f"✅ 当前已是最新版本 ({local})"
+    return "⚠️ 无法检查更新（网络异常或非 git 环境）"
 
 # ============================================================
 # 构建 Gradio 界面
@@ -558,6 +624,13 @@ def build_ui():
                             cur_val = current_env.get(key, default_val)
                             if kind == "password":
                                 inp = gr.Textbox(label=label, value=cur_val, type="password")
+                            elif kind == "bool":
+                                bool_default = cur_val.lower() == "true"
+                                inp = gr.Dropdown(
+                                    label=label, value=str(bool_default),
+                                    choices=["True", "False"],
+                                    info="True = 启动时自动 git pull 检查更新；False = 仅手动更新"
+                                )
                             elif kind in ("int", "float"):
                                 inp = gr.Textbox(label=label, value=str(cur_val), placeholder=default_val)
                             else:
@@ -581,12 +654,37 @@ def build_ui():
 
             save_btn.click(_on_save, _input_widgets, [save_msg])
 
+            # ---- 手动更新区域 ----
+            gr.Markdown("---")
+            gr.Markdown(_make_title("📦 手动更新"))
+            gr.Markdown(f"当前版本: `{_get_current_version()}`")
+
+            with gr.Row():
+                check_btn = gr.Button("🔍 检查更新", variant="secondary", scale=1)
+                update_btn = gr.Button("⬇️ 立即更新", variant="primary", scale=1)
+            update_output = gr.Textbox(label="更新日志", lines=6, elem_classes="output-text",
+                                       placeholder="检查/更新结果会显示在这里...")
+
+            def _on_check():
+                has_update, local, remote = _check_update()
+                if has_update is None:
+                    return "⚠️ 无法检查更新（网络异常或非 git 环境）"
+                if has_update:
+                    return f"🔔 发现新版本! 本地: {local} → 远程: {remote}"
+                return f"✅ 当前已是最新版本 (本地: {local})"
+
+            check_btn.click(_on_check, [], [update_output])
+            update_btn.click(_do_update, [], [update_output])
+
     return app
 
 
 if __name__ == "__main__":
     import traceback
     try:
+        update_msg = _check_and_update_on_startup()
+        if update_msg:
+            print(update_msg)
         build_ui().launch(server_name="127.0.0.1", server_port=7860, share=False, inbrowser=True)
     except Exception:
         print("\n❌ 启动失败：\n")
