@@ -162,11 +162,7 @@ def get_llm(model_name: str) -> ChatOpenAI:
         max_tokens=MAX_CONTEXT_TOKENS,
         base_url=config.OPENAI_BASE_URL,
         api_key=config.OPENAI_API_KEY,
-        extra_body={
-            "thinking": False,
-            "enable_thinking": False,
-            "reasoning": False
-        }
+        extra_body=config.get_llm_extra_body()
     )
 
 # -------------------- 单章翻译（供线程调用）--------------------

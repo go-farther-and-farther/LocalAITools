@@ -26,7 +26,7 @@ def _make_title(text):
 
 
 def _capture_log(fn, *args, **kwargs):
-    """捕获 logging 输出为字符串"""
+    """捕获 logging 输出为字符串，异常时返回错误信息"""
     stream = io.StringIO()
     handler = logging.StreamHandler(stream)
     handler.setLevel(logging.INFO)
@@ -35,6 +35,10 @@ def _capture_log(fn, *args, **kwargs):
     root.addHandler(handler)
     try:
         fn(*args, **kwargs)
+    except Exception as e:
+        import traceback
+        stream.write(f"❌ 处理出错: {e}\n")
+        stream.write(traceback.format_exc())
     finally:
         root.removeHandler(handler)
     return stream.getvalue() or "✅ 处理完成"
@@ -43,7 +47,7 @@ def _capture_log(fn, *args, **kwargs):
 # ============================================================
 # Tab 1: 图片重命名
 # ============================================================
-def _rename_images(input_dir, model, workers, dry_run):
+def _rename_images(input_dir, model, workers, dry_run, progress=gr.Progress()):
     from image_tools.rename_images import process_one_image, get_shared_llm
     from collections import deque
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -66,6 +70,7 @@ def _rename_images(input_dir, model, workers, dry_run):
     recent_history = deque(maxlen=5)
     results = []
     total = len(images)
+    completed = 0
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {executor.submit(process_one_image, img, model or config.RENAME_MODEL, dry_run, recent_history): img
@@ -76,6 +81,8 @@ def _rename_images(input_dir, model, workers, dry_run):
                 results.append(f"{old_name} → {new_phrase}")
             except Exception as e:
                 results.append(f"❌ 错误: {e}")
+            completed += 1
+            progress(completed / total, desc=f"重命名中 {completed}/{total}")
 
     return f"处理完成：{total} 张图片\n\n" + "\n".join(results)
 
@@ -83,9 +90,14 @@ def _rename_images(input_dir, model, workers, dry_run):
 # ============================================================
 # Tab 2: 图片质量评分与分类（合并原 Tab 2 + Tab 3）
 # ============================================================
-def _detect_and_classify(input_dir, mode):
+def _detect_and_classify(input_dir, mode, top_percent, bottom_percent, custom_prompt, progress=gr.Progress()):
     from image_tools.detect_ai_errors import process_and_classify
-    return _capture_log(process_and_classify, input_dir, mode)
+
+    def on_progress(completed, total):
+        progress(completed / total, desc=f"评分中 {completed}/{total}")
+
+    return _capture_log(process_and_classify, input_dir, mode, on_progress,
+                        top_percent / 100, bottom_percent / 100, custom_prompt)
 
 
 # ============================================================
@@ -240,6 +252,9 @@ SETTINGS_SCHEMA = [
     ("🔗 API 连接", [
         ("OPENAI_BASE_URL", "API 地址", "http://localhost:1234/v1", "text"),
         ("OPENAI_API_KEY", "API 密钥", "lm-studio", "password"),
+    ]),
+    ("🧠 推理设置", [
+        ("ENABLE_THINKING", "启用思考模式（Thinking）", "true", "bool"),
     ]),
     ("🤖 模型名称", [
         ("VISION_MODEL", "视觉模型（图片识别、质量检测）", "qwen/qwen3.6-27b", "text"),
@@ -523,8 +538,8 @@ ollama pull qwen3     # 下载模型
                             "**两种模式：**\n"
                             "- 🎨 **AI 图片错误检测** — 检测 AI 生成图的肢体错乱、面部畸形、结构崩坏等问题\n"
                             "- 📸 **漫展摄影筛选** — 检测跑焦模糊、过曝欠曝等拍摄问题，筛选可出片的 Cosplay 照片\n\n"
-                            f"> 📊 前 **{config.TOP_PERCENT*100:.0f}%** 高分 → `{config.HIGH_QUALITY_FOLDER}/`，后 **{config.BOTTOM_PERCENT*100:.0f}%** 低分 + 错误 → `{config.LOW_QUALITY_ERRORS_FOLDER}/`\n"
-                            "> 💡 每张图会生成同名 `.txt` 评分文件，方便核对")
+                            "> 💡 每张图会生成同名 `.txt` 评分文件，方便核对\n"
+                            "> 🎛️ 下方的分拣比例和评分标准均可自由调整")
             with gr.Row():
                 with gr.Column(scale=2):
                     de_mode = gr.Dropdown(
@@ -537,11 +552,28 @@ ollama pull qwen3     # 下载模型
                                           value=str(config.DATA_DIR / "images"),
                                           placeholder="粘贴图片所在文件夹的完整路径",
                                           info="处理完成后会在该文件夹下生成 HighQuality/ 和 LowQuality_Errors/ 子文件夹")
+
+                    with gr.Accordion("🎛️ 分拣规则 & 提示词", open=False):
+                        with gr.Row():
+                            de_top = gr.Slider(1, 50, value=int(config.TOP_PERCENT * 100), step=1,
+                                               label=f"高分比例（%）",
+                                               info="评分前 N% 的图片移入 HighQuality 目录")
+                            de_bottom = gr.Slider(1, 50, value=int(config.BOTTOM_PERCENT * 100), step=1,
+                                                  label="低分比例（%）",
+                                                  info="评分后 N% 的图片 + 所有 ERR 图片移入 LowQuality_Errors")
+                        de_prompt = gr.Textbox(
+                            label="自定义评分提示词（留空使用默认）",
+                            value="",
+                            lines=8,
+                            placeholder="在此输入自定义评分标准...\n\n留空则使用当前模式的默认提示词。\n修改提示词可以：调整评分宽松度、改变关注重点、自定义输出格式等。\n\n提示：切换检测模式后请清空此框或重新填写对应模式的提示词。",
+                            info="留空 = 使用默认提示词。填写后覆盖默认，适合有经验的用户微调评分标准。"
+                        )
+
                     de_btn = gr.Button("开始评分分类", variant="primary")
                 with gr.Column(scale=3):
                     de_output = gr.Textbox(label="处理日志", lines=15, elem_classes="output-text",
                                            placeholder="处理完成后这里会显示每张图的评分和分类结果...")
-            de_btn.click(_detect_and_classify, [de_input, de_mode], [de_output])
+            de_btn.click(_detect_and_classify, [de_input, de_mode, de_top, de_bottom, de_prompt], [de_output])
 
         # ==================== Tab 3: 聊天截图识别 ====================
         with gr.Tab("💬 聊天截图识别"):
@@ -718,10 +750,14 @@ ollama pull qwen3     # 下载模型
                                 inp = gr.Textbox(label=label, value=cur_val, type="password")
                             elif kind == "bool":
                                 bool_default = cur_val.lower() == "true"
+                                if key == "ENABLE_THINKING":
+                                    bool_info = "True = 模型先思考再回答（适合复杂任务）；False = 直接输出（更快，适合简单任务）"
+                                else:
+                                    bool_info = "True = 启动时自动 git pull 检查更新；False = 仅手动更新"
                                 inp = gr.Dropdown(
                                     label=label, value=str(bool_default),
                                     choices=["True", "False"],
-                                    info="True = 启动时自动 git pull 检查更新；False = 仅手动更新"
+                                    info=bool_info
                                 )
                             elif kind in ("int", "float"):
                                 inp = gr.Textbox(label=label, value=str(cur_val), placeholder=default_val)

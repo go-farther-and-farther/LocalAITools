@@ -99,7 +99,8 @@ def extract_text_from_slices(slices: List[Image.Image], model: str,
                 max_tokens=max_tokens,
                 base_url=config.OPENAI_BASE_URL,
                 api_key=config.OPENAI_API_KEY,
-                request_timeout=300  # 多图可能耗时较长
+                request_timeout=300,  # 多图可能耗时较长
+                extra_body=config.get_llm_extra_body()
             )
 
             content = [{"type": "text", "text": EXTRACT_PROMPT}]

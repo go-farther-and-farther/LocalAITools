@@ -63,6 +63,7 @@ def get_shared_llm(model: str, temperature: float = 0.5) -> ChatOpenAI:
                     max_tokens=2048,
                     base_url=config.OPENAI_BASE_URL,
                     api_key=config.OPENAI_API_KEY,
+                    extra_body=config.get_llm_extra_body()
                 )
     return _llm_instance
 

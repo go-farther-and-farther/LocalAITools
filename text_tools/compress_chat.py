@@ -7,6 +7,7 @@
 
 import re
 import sys
+import config
 from pathlib import Path
 from typing import List, Tuple, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -134,7 +135,8 @@ def compress_chunk(chunk_text, chunk_idx, model, temperature, max_tokens):
                 max_tokens=max_tokens,
                 base_url=config.OPENAI_BASE_URL,
                 api_key=config.OPENAI_API_KEY,
-                request_timeout=300
+                request_timeout=300,
+                extra_body=config.get_llm_extra_body()
             )
             prompt = COMPRESS_PROMPT + f"\n[这是第{chunk_idx+1}块，请压缩并确保与前后连贯]\n\n"
             resp = llm.invoke([HumanMessage(content=prompt + chunk_text)])

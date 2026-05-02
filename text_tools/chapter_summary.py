@@ -152,6 +152,7 @@ def query_knowledge_base(
         streaming=True,
         base_url=config.OPENAI_BASE_URL,
         api_key=config.OPENAI_API_KEY,
+        extra_body=config.get_llm_extra_body()
     )
 
     answers: List[str] = []
