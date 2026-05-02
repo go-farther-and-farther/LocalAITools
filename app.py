@@ -341,5 +341,11 @@ def build_ui():
 
 
 if __name__ == "__main__":
-    ui = build_ui()
-    ui.launch(server_name="127.0.0.1", server_port=7860, share=False, inbrowser=True)
+    import traceback
+    try:
+        build_ui().launch(server_name="127.0.0.1", server_port=7860, share=False, inbrowser=True)
+    except Exception:
+        print("\n❌ 启动失败：\n")
+        traceback.print_exc()
+        print("\n按 Enter 键退出...")
+        input()

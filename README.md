@@ -56,6 +56,8 @@ python app.py
 # 自动打开浏览器 → http://localhost:7860
 ```
 
+> **Windows 用户**：也可以直接双击 `run.bat` 启动，无需打开终端手动输入命令。如果启动失败，窗口不会消失，方便查看错误信息。
+
 ![界面截图](img.png)
 
 ### 5. 命令行用法（示例）
@@ -90,6 +92,7 @@ python benchmarks/speedtest.py --url http://localhost:1234/v1 --model qwen3.6-35
 ```
 LocalAITools/
 ├── app.py                  # Gradio Web 界面入口
+├── run.bat                 # Windows 双击启动脚本
 ├── config.py               # 统一配置模块
 ├── .env.example            # 配置模板（复制为 .env）
 ├── requirements.txt
