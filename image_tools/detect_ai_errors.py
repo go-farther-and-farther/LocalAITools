@@ -161,18 +161,21 @@ def detect_image_quality(image_path: Path, mode: str = "ai", custom_prompt: str 
                         score = float(parts[0])
                         reason = parts[1] if len(parts) > 1 else ""
                         if 0.0 <= score <= 10.0:
+                            logging.info(f"📸 {image_path.name} → 评分: {score} 分  {reason}")
                             return round(score, 1), None, reason
                     except ValueError:
                         pass
             elif result.startswith("ERR:"):
                 error = result[4:].strip()
                 if error:
+                    logging.info(f"📸 {image_path.name} → ❌ 错误: {error}")
                     return None, error, ""
 
             # 兼容纯数字
             try:
                 score = float(result)
                 if 0.0 <= score <= 10.0:
+                    logging.info(f"📸 {image_path.name} → 评分: {score} 分")
                     return round(score, 1), None, ""
             except ValueError:
                 pass
