@@ -15,14 +15,6 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
 from tqdm import tqdm
 
-# ================= 配置 =================
-config.OPENAI_BASE_URL = "http://localhost:1234/v1"
-config.OPENAI_API_KEY = "lm-studio"
-config.VISION_MODEL_THINKING = "qwen/qwen3.6-35b-a3b-Thinking"
-
-config.DEFAULT_CHUNK_SIZE = 20480      # 每块最大字符数
-config.OVERLAP_MESSAGES = 2            # 块间重叠消息数
-config.RETRY_TIMES = 2                  # 压缩失败重试次数
 
 COMPRESS_PROMPT = """你是一个聊天记录压缩助手，请将以下原始聊天记录压缩成简洁版本。
 
@@ -135,7 +127,7 @@ def compress_chunk(chunk_text, chunk_idx, model, temperature, max_tokens):
                 max_tokens=max_tokens,
                 base_url=config.OPENAI_BASE_URL,
                 api_key=config.OPENAI_API_KEY,
-                request_timeout=300,
+                request_timeout=config.REQUEST_TIMEOUT,
                 extra_body=config.get_llm_extra_body()
             )
             prompt = COMPRESS_PROMPT + f"\n[这是第{chunk_idx+1}块，请压缩并确保与前后连贯]\n\n"
@@ -163,7 +155,7 @@ def remove_duplicate_time_header(text, prev_tail):
 
 def process_single_text_file(txt_path, output_txt_path=None, model=config.VISION_MODEL_THINKING,
                              temperature=0.2, max_tokens=4000, chunk_size=config.DEFAULT_CHUNK_SIZE,
-                             internal_workers=2):
+                             internal_workers=2, progress_callback=None):
     print(f"\n📄 处理: {txt_path.name}")
     with open(txt_path, 'r', encoding='utf-8-sig') as f:
         raw_text = f.read()
@@ -181,12 +173,20 @@ def process_single_text_file(txt_path, output_txt_path=None, model=config.VISION
     print(f"   ✂️  分为 {total} 块 (≤{chunk_size}字符/块, 重叠{config.OVERLAP_MESSAGES}条)")
 
     results = [None] * total
+    chunk_done = 0
+
+    def chunk_finished():
+        nonlocal chunk_done
+        chunk_done += 1
+        if progress_callback:
+            progress_callback(chunk_done, total)
 
     # 根据块数量决定是否并发
     if total == 1 or internal_workers <= 1:
         for i, chunk in enumerate(chunks):
             print(f"      🚀 压缩第{i+1}/{total}块...")
             results[i] = compress_chunk(chunk, i, model, temperature, max_tokens)
+            chunk_finished()
     else:
         print(f"   📤 启动 {internal_workers} 路并发压缩...")
         with ThreadPoolExecutor(max_workers=internal_workers) as executor:
@@ -205,6 +205,7 @@ def process_single_text_file(txt_path, output_txt_path=None, model=config.VISION
                     # 极端情况，仍然用原文兜底
                     print(f"      ❌ 第{idx+1}块结果为空，使用原文")
                     results[idx] = f"[结果为空，保留原文]\n{chunks[idx]}"
+                chunk_finished()
 
     # 合并所有块（绝不跳过任何一块）
     merged = ""
@@ -237,7 +238,8 @@ def process_single_text_file(txt_path, output_txt_path=None, model=config.VISION
 
 
 def process_folder(input_dir, output_dir=None, model=config.VISION_MODEL_THINKING, temperature=0.2,
-                   max_tokens=4000, chunk_size=config.DEFAULT_CHUNK_SIZE, internal_workers=2):
+                   max_tokens=4000, chunk_size=config.DEFAULT_CHUNK_SIZE, internal_workers=2,
+                   progress_callback=None):
     txt_files = list(Path(input_dir).glob("*.txt"))
     if not txt_files:
         print("❌ 无 .txt 文件")
@@ -251,7 +253,8 @@ def process_folder(input_dir, output_dir=None, model=config.VISION_MODEL_THINKIN
     for f in txt_files:
         out = output_dir / f"{f.stem}.compressed.txt"
         try:
-            process_single_text_file(f, out, model, temperature, max_tokens, chunk_size, internal_workers)
+            process_single_text_file(f, out, model, temperature, max_tokens, chunk_size,
+                                     internal_workers, progress_callback=progress_callback)
         except Exception as e:
             print(f"❌ 处理 {f.name} 失败: {e}")
 

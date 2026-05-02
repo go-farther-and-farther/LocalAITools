@@ -99,7 +99,7 @@ def extract_text_from_slices(slices: List[Image.Image], model: str,
                 max_tokens=max_tokens,
                 base_url=config.OPENAI_BASE_URL,
                 api_key=config.OPENAI_API_KEY,
-                request_timeout=300,  # 多图可能耗时较长
+                request_timeout=config.REQUEST_TIMEOUT,
                 extra_body=config.get_llm_extra_body()
             )
 
@@ -188,7 +188,8 @@ def process_folder(input_dir: Path,
                    temperature: float = 0.3,
                    max_workers: int = 1,        # 建议初期设为1
                    max_tokens: int = 5000,
-                   internal_workers: int = 2):   # 建议初期设为1，稳定后提至2
+                   internal_workers: int = 2,   # 建议初期设为1，稳定后提至2
+                   progress_callback=None):
     """批量处理文件夹内所有图片"""
     exts = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
     images = [f for f in input_dir.iterdir() if f.suffix.lower() in exts]
@@ -196,12 +197,14 @@ def process_folder(input_dir: Path,
         print(f"❌ 文件夹 {input_dir} 中没有找到图片。")
         return
 
-    print(f"📂 共发现 {len(images)} 张图片。")
+    total = len(images)
+    print(f"📂 共发现 {total} 张图片。")
     if output_dir is None:
         output_dir = input_dir / "chat_text_output"
     output_dir.mkdir(exist_ok=True)
 
     tasks = [(img, output_dir / f"{img.stem}.txt") for img in images]
+    completed = 0
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_img = {
@@ -211,12 +214,15 @@ def process_folder(input_dir: Path,
             ): img
             for img, out in tasks
         }
-        for future in tqdm(as_completed(future_to_img), total=len(images), desc="总体进度"):
+        for future in tqdm(as_completed(future_to_img), total=total, desc="总体进度"):
             img = future_to_img[future]
             try:
                 future.result()
             except Exception as e:
                 print(f"❌ 处理 {img.name} 时发生异常: {e}")
+            completed += 1
+            if progress_callback:
+                progress_callback(completed, total)
 
     print("\n🎉 所有图片处理完成！")
 

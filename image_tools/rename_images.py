@@ -9,6 +9,7 @@
 """
 
 import os
+import io as io_module
 import re
 import sys
 import base64
@@ -81,10 +82,20 @@ def add_recent_description(recent_queue: deque, description: str):
 
 
 def encode_image(image_path: str) -> Optional[str]:
+    from PIL import Image, ImageOps
     try:
-        with open(image_path, "rb") as f:
-            return base64.b64encode(f.read()).decode("utf-8")
-    except (OSError, IOError) as e:
+        img = Image.open(image_path)
+        try:
+            img = ImageOps.exif_transpose(img)
+        except Exception:
+            pass
+        buf = io_module.BytesIO()
+        fmt = img.format or 'JPEG'
+        if fmt.upper() == 'WEBP' and img.mode in ('RGBA', 'P'):
+            img = img.convert('RGB')
+        img.save(buf, format=fmt)
+        return base64.b64encode(buf.getvalue()).decode("utf-8")
+    except Exception as e:
         print(f"   ⚠️ 图片读取失败: {Path(image_path).name} - {e}")
         return None
 

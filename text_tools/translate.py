@@ -237,7 +237,8 @@ def translate_book_parallel(
     batch_size: int = 10,
     workers: int = 2,
     resume: bool = True,
-    max_chapters: Optional[int] = None
+    max_chapters: Optional[int] = None,
+    progress_callback=None
 ):
     print(f"\n{'='*60}")
     print(f"🚀 开始翻译任务")
@@ -305,6 +306,7 @@ def translate_book_parallel(
 
         # 并发执行本批次
         batch_results = [None] * (batch_end - batch_start)
+        batch_done = 0
         with ThreadPoolExecutor(max_workers=workers) as executor:
             future_to_idx = {}
             for idx, title, content, prev_trans in tasks:
@@ -324,6 +326,9 @@ def translate_book_parallel(
                 except Exception as e:
                     print(f"   ❌ 第 {idx+1} 章失败: {e}")
                     batch_results[idx - batch_start] = f"### Chapter {idx+1} (Failed)\n\n[Translation Error]"
+                batch_done += 1
+                if progress_callback:
+                    progress_callback(batch_start + batch_done, total_chapters)
 
         # 过滤掉 None（理论上不应有）
         valid_results = [r for r in batch_results if r is not None]

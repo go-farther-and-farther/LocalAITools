@@ -15,6 +15,7 @@ from contextlib import redirect_stdout
 
 sys.path.insert(0, str(Path(__file__).parent))
 import config
+import history
 
 import gradio as gr
 
@@ -84,7 +85,9 @@ def _rename_images(input_dir, model, workers, dry_run, progress=gr.Progress()):
             completed += 1
             progress(completed / total, desc=f"重命名中 {completed}/{total}")
 
-    return f"处理完成：{total} 张图片\n\n" + "\n".join(results)
+    result = f"处理完成：{total} 张图片\n\n" + "\n".join(results)
+    history.add_entry("图片重命名", input_dir, f"处理 {total} 张图片")
+    return result
 
 
 # ============================================================
@@ -96,14 +99,18 @@ def _detect_and_classify(input_dir, mode, top_percent, bottom_percent, custom_pr
     def on_progress(completed, total):
         progress(completed / total, desc=f"评分中 {completed}/{total}")
 
-    return _capture_log(process_and_classify, input_dir, mode, on_progress,
-                        top_percent / 100, bottom_percent / 100, custom_prompt)
+    result = _capture_log(process_and_classify, input_dir, mode, on_progress,
+                           top_percent / 100, bottom_percent / 100, custom_prompt)
+    mode_label = "漫展摄影" if mode == "photo" else "AI图片检测"
+    history.add_entry(f"质量评分({mode_label})", input_dir, "评分分类完成")
+    return result
 
 
 # ============================================================
 # Tab 3: 聊天截图识别
 # ============================================================
-def _explain_images(input_dir, vision_model, temperature, workers, internal_workers, max_tokens):
+def _explain_images(input_dir, vision_model, temperature, workers, internal_workers, max_tokens,
+                    progress=gr.Progress()):
     from image_tools.ocr_chat_screenshots import process_folder
 
     input_path = Path(input_dir)
@@ -112,6 +119,9 @@ def _explain_images(input_dir, vision_model, temperature, workers, internal_work
 
     output_dir = input_path / "chat_text_output"
     output_dir.mkdir(exist_ok=True)
+
+    def on_progress(completed, total):
+        progress(completed / total, desc=f"识别中 {completed}/{total}")
 
     buf = io.StringIO()
     with redirect_stdout(buf):
@@ -122,17 +132,24 @@ def _explain_images(input_dir, vision_model, temperature, workers, internal_work
             temperature,
             workers,
             max_tokens,
-            internal_workers
+            internal_workers,
+            progress_callback=on_progress
         )
 
-    return f"✅ 输出目录: {output_dir}\n\n{buf.getvalue()}"
+    result = f"✅ 输出目录: {output_dir}\n\n{buf.getvalue()}"
+    history.add_entry("截图识别", input_dir, "文字提取完成")
+    return result
 
 
 # ============================================================
 # Tab 4: 聊天记录压缩
 # ============================================================
-def _compress_text(input_path, model, temperature, chunk_size, internal_workers, max_tokens):
+def _compress_text(input_path, model, temperature, chunk_size, internal_workers, max_tokens,
+                   progress=gr.Progress()):
     from text_tools.compress_chat import process_single_text_file, process_folder
+
+    def on_progress(completed, total):
+        progress(completed / total, desc=f"压缩中 {completed}/{total}")
 
     p = Path(input_path)
     buf = io.StringIO()
@@ -141,24 +158,28 @@ def _compress_text(input_path, model, temperature, chunk_size, internal_workers,
             process_single_text_file(
                 p, None,
                 model or config.VISION_MODEL_THINKING,
-                temperature, max_tokens, chunk_size, internal_workers
+                temperature, max_tokens, chunk_size, internal_workers,
+                progress_callback=on_progress
             )
         elif p.is_dir():
             process_folder(
                 p, None,
                 model or config.VISION_MODEL_THINKING,
-                temperature, max_tokens, chunk_size, internal_workers
+                temperature, max_tokens, chunk_size, internal_workers,
+                progress_callback=on_progress
             )
         else:
             return "❌ 路径无效"
 
-    return f"✅ 处理完成\n\n{buf.getvalue()}"
+    result = f"✅ 处理完成\n\n{buf.getvalue()}"
+    history.add_entry("聊天压缩", input_path, "压缩完成")
+    return result
 
 
 # ============================================================
 # Tab 5: 文本翻译
 # ============================================================
-def _translate(input_file, output_file, model, batch_size, workers):
+def _translate(input_file, output_file, model, batch_size, workers, progress=gr.Progress()):
     from text_tools.translate import translate_book_parallel
 
     if not Path(input_file).is_file():
@@ -167,31 +188,43 @@ def _translate(input_file, output_file, model, batch_size, workers):
     output_file = output_file or str(config.OUTPUT_DIR / "translation" / "translation.txt")
     Path(output_file).parent.mkdir(parents=True, exist_ok=True)
 
+    def on_progress(completed, total):
+        progress(completed / total, desc=f"翻译中 {completed}/{total}")
+
     buf = io.StringIO()
     with redirect_stdout(buf):
         translate_book_parallel(
             input_file, output_file,
             model or config.TEXT_MODEL,
             batch_size, workers,
-            resume=True
+            resume=True,
+            progress_callback=on_progress
         )
 
-    return f"✅ 输出: {output_file}\n\n{buf.getvalue()}"
+    result = f"✅ 输出: {output_file}\n\n{buf.getvalue()}"
+    history.add_entry("文本翻译", input_file, "翻译完成")
+    return result
 
 
 # ============================================================
 # Tab 6: 知识库问答
 # ============================================================
-def _query_kb(query, keyword, model, k, batch_size):
+def _query_kb(query, keyword, model, k, batch_size, progress=gr.Progress()):
     from text_tools.chapter_summary import query_knowledge_base
 
     if not query.strip():
         return "❌ 请输入查询问题"
 
     progress_lines = []
+    # query_knowledge_base 用轮数作为进度，预估约 3-5 轮
+    round_count = [0]
 
     def on_progress(msg: str):
         progress_lines.append(msg)
+        round_count[0] += 1
+        # 模拟进度，每轮推进一部分
+        pct = min(0.95, round_count[0] / max(3, 1))
+        progress(pct, desc=f"检索回答中 (第{round_count[0]}轮)")
 
     answer = query_knowledge_base(
         query=query,
@@ -202,8 +235,11 @@ def _query_kb(query, keyword, model, k, batch_size):
         progress_callback=on_progress,
     )
 
+    progress(1.0, desc="完成")
     progress_text = "\n".join(f"⏳ {l}" for l in progress_lines)
-    return f"{progress_text}\n\n{answer}"
+    result = f"{progress_text}\n\n{answer}"
+    history.add_entry("知识库问答", query[:50], "查询完成")
+    return result
 
 
 # ============================================================
@@ -235,6 +271,7 @@ def _benchmark(url, model, api_key, concurrency, timeout, output_tokens, lengths
         )
 
     text_output = buf.getvalue()
+    history.add_entry("LLM压测", model or url, "压测完成")
     plot_path = Path(save_plot)
     if plot_path.exists():
         return text_output, str(plot_path)
@@ -504,6 +541,25 @@ ollama pull qwen3     # 下载模型
             gr.Markdown('<div style="text-align:center;color:#888;font-size:0.85em">'
                         '遇到问题？<a href="https://github.com/go-farther-and-farther/LocalAITools/issues" target="_blank">GitHub Issues</a>'
                         '</div>')
+
+            # ---- 历史记录 ----
+            gr.Markdown("---")
+            with gr.Accordion("📋 处理历史", open=False):
+                history_md = gr.Markdown("")
+
+            def _load_history():
+                entries = history.get_recent(20)
+                if not entries:
+                    return "暂无处理记录。\n\n每次使用工具处理文件后，这里会自动记录。"
+                lines = ["| 时间 | 工具 | 输入 | 摘要 |",
+                         "|------|------|------|------|"]
+                for e in entries:
+                    inp = str(e["input"])[:40]
+                    lines.append(f"| {e['time']} | {e['tool']} | {inp} | {e['summary']} |")
+                return "\n".join(lines)
+
+            # 每次切换到该 Tab 时刷新历史
+            app.load(_load_history, outputs=[history_md])
 
         # ==================== Tab 1: 图片重命名 ====================
         with gr.Tab("🖼️ 图片重命名"):
