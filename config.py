@@ -64,7 +64,7 @@ SOURCE_LANG = os.getenv("SOURCE_LANG", "Chinese")
 TARGET_LANG = os.getenv("TARGET_LANG", "English")
 
 # ==================== 更新设置 ====================
-AUTO_UPDATE = os.getenv("AUTO_UPDATE", "true").lower() == "true"
+AUTO_UPDATE = os.getenv("AUTO_UPDATE", "false").lower() == "true"
 
 # ==================== 思考模式 ====================
 # 是否启用模型的思考/推理模式（Thinking/Reasoning）。
