@@ -2,8 +2,7 @@
 
 一套调用本地大模型（兼容 OpenAI API）的实用工具集合，涵盖图片处理、文本处理、性能测试。支持 **LM Studio / Ollama / vLLM / 云端 API**。
 
-- **图形界面**：一行命令启动 Web UI，无需敲代码
-- ![img.png](img.png)
+- **图形界面**：一行命令启动 Web UI，自动打开浏览器，无需敲代码
 - **命令行**：每个工具也可独立运行，方便脚本集成
 - **统一配置**：所有工具的 API 地址、模型名称、参数集中在 `.env` 文件中管理
 
@@ -54,8 +53,10 @@ cp .env.example .env
 
 ```bash
 python app.py
-# 浏览器打开 http://localhost:7860
+# 自动打开浏览器 → http://localhost:7860
 ```
+
+![界面截图](img.png)
 
 ### 5. 命令行用法（示例）
 

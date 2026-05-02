@@ -17,3 +17,7 @@ build/
 # IDE
 .idea/
 .vscode/
+
+# 用户数据目录（测试文件、输出文件不提交）
+data/
+outputs/
