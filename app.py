@@ -227,6 +227,104 @@ def _benchmark(url, model, api_key, concurrency, timeout, output_tokens, lengths
 
 
 # ============================================================
+# 设置页：读写 .env
+# ============================================================
+ENV_PATH = Path(__file__).parent / ".env"
+EXAMPLE_PATH = Path(__file__).parent / ".env.example"
+
+# 需要显示在设置页的配置项及分组
+SETTINGS_SCHEMA = [
+    ("🔗 API 连接", [
+        ("OPENAI_BASE_URL", "API 地址", "http://localhost:1234/v1", "text"),
+        ("OPENAI_API_KEY", "API 密钥", "lm-studio", "password"),
+    ]),
+    ("🤖 模型名称", [
+        ("VISION_MODEL", "视觉模型（图片识别、质量检测）", "qwen/qwen3.6-27b", "text"),
+        ("VISION_MODEL_THINKING", "视觉模型-思考版（截图 OCR 推荐）", "qwen/qwen3.6-35b-a3b-Thinking", "text"),
+        ("RENAME_MODEL", "图片重命名模型", "qwen/Qwen3.6-27b", "text"),
+        ("TEXT_MODEL", "文本模型（翻译、压缩、知识库）", "qwen/qwen3.5-9b", "text"),
+        ("BENCHMARK_MODEL", "压测模型", "qwen3.6-35b-a3b@iq2_xxs", "text"),
+    ]),
+    ("⚡ 并发与超时", [
+        ("DEFAULT_WORKERS", "默认并行线程数", "2", "int"),
+        ("RETRY_TIMES", "失败重试次数", "2", "int"),
+        ("REQUEST_TIMEOUT", "请求超时-长任务（秒）", "300", "int"),
+        ("REQUEST_TIMEOUT_SHORT", "请求超时-短任务（秒）", "60", "int"),
+    ]),
+    ("🖼️ 图片处理", [
+        ("SLICE_HEIGHT", "长截图切片高度（像素）", "2000", "int"),
+        ("OVERLAP", "切片重叠高度（像素）", "400", "int"),
+        ("TOP_PERCENT", "高质量比例（小数）", "0.05", "float"),
+        ("BOTTOM_PERCENT", "低质量比例（小数）", "0.05", "float"),
+        ("HIGH_QUALITY_FOLDER", "高质量目录名", "HighQuality", "text"),
+        ("LOW_QUALITY_ERRORS_FOLDER", "低质量目录名", "LowQuality_Errors", "text"),
+    ]),
+    ("📝 文本 / 翻译", [
+        ("DEFAULT_CHUNK_SIZE", "聊天分块大小（字符）", "20480", "int"),
+        ("OVERLAP_MESSAGES", "块间重叠消息数", "2", "int"),
+        ("SOURCE_LANG", "翻译源语言", "Chinese", "text"),
+        ("TARGET_LANG", "翻译目标语言", "English", "text"),
+    ]),
+    ("📂 目录与索引", [
+        ("DATA_DIR", "数据输入目录", "data", "text"),
+        ("OUTPUT_DIR", "输出目录", "outputs", "text"),
+        ("FAISS_INDEX_PATH", "FAISS 索引路径", "faiss_index", "text"),
+        ("EMBEDDING_MODEL_PATH", "Embedding 模型路径（留空=在线下载）", "", "text"),
+    ]),
+]
+
+
+def _read_env() -> dict:
+    """读取 .env 文件返回 {KEY: value}"""
+    if not ENV_PATH.exists():
+        return {}
+    import re
+    result = {}
+    for line in ENV_PATH.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        m = re.match(r"^(\w+)\s*=\s*(.*)$", line)
+        if m:
+            result[m.group(1)] = m.group(2).strip()
+    return result
+
+
+def _save_env(updates: dict) -> str:
+    """将 updates 中的键值写入 .env 文件，保留原有注释和其他行"""
+    try:
+        import re
+        if ENV_PATH.exists():
+            lines = ENV_PATH.read_text(encoding="utf-8").splitlines()
+        elif EXAMPLE_PATH.exists():
+            lines = EXAMPLE_PATH.read_text(encoding="utf-8").splitlines()
+        else:
+            lines = []
+
+        updated_keys = set()
+        new_lines = []
+        for line in lines:
+            m = re.match(r"^(\w+)\s*=\s*(.*)$", line.strip())
+            if m:
+                key = m.group(1)
+                if key in updates:
+                    new_lines.append(f"{key}={updates[key]}")
+                    updated_keys.add(key)
+                    continue
+            new_lines.append(line)
+
+        # 追加新增的 key
+        for key, val in updates.items():
+            if key not in updated_keys:
+                new_lines.append(f"{key}={val}")
+
+        ENV_PATH.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+        return "✅ 设置已保存。部分配置需要重启应用才能生效。"
+    except Exception as e:
+        return f"❌ 保存失败: {e}"
+
+
+# ============================================================
 # 构建 Gradio 界面
 # ============================================================
 def build_ui():
@@ -444,6 +542,44 @@ def build_ui():
                     bm_plot = gr.Image(label="吞吐量图表")
             bm_btn.click(_benchmark, [bm_url, bm_model, bm_key, bm_concur, bm_timeout, bm_outtok, bm_lengths],
                         [bm_text, bm_plot])
+
+        # ==================== Tab 8: 设置 ====================
+        with gr.Tab("⚙️ 设置"):
+            gr.Markdown(_make_title("全局配置 — 在线编辑 .env 文件"))
+            gr.Markdown("在此修改 API 地址、模型名称、并发参数等。点「保存」后写入 `.env` 文件，**部分配置需重启应用才能生效**。")
+
+            current_env = _read_env()
+            setting_inputs: dict = {}
+
+            with gr.Column():
+                for section_name, fields in SETTINGS_SCHEMA:
+                    with gr.Accordion(section_name, open=False):
+                        for key, label, default_val, kind in fields:
+                            cur_val = current_env.get(key, default_val)
+                            if kind == "password":
+                                inp = gr.Textbox(label=label, value=cur_val, type="password")
+                            elif kind in ("int", "float"):
+                                inp = gr.Textbox(label=label, value=str(cur_val), placeholder=default_val)
+                            else:
+                                inp = gr.Textbox(label=label, value=cur_val, placeholder=default_val)
+                            setting_inputs[key] = inp
+
+                save_btn = gr.Button("💾 保存设置", variant="primary", scale=0)
+                save_msg = gr.Textbox(label="", interactive=False, container=False, show_label=False)
+
+            # 按固定顺序收集所有输入组件及其对应的 key
+            _input_keys = []
+            _input_widgets = []
+            for _, fields in SETTINGS_SCHEMA:
+                for key, _, _, _ in fields:
+                    _input_keys.append(key)
+                    _input_widgets.append(setting_inputs[key])
+
+            def _on_save(*values):
+                updates = dict(zip(_input_keys, values))
+                return _save_env(updates)
+
+            save_btn.click(_on_save, _input_widgets, [save_msg])
 
     return app
 
