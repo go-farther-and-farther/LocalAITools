@@ -1,71 +1,75 @@
 # LocalAITools - 本地 AI 工具箱
 
-一套调用本地大模型（兼容 OpenAI API）的实用工具集合，涵盖图片处理、文本处理、知识库问答、性能测试。支持 **LM Studio / Ollama / vLLM / 云端 API**。
+> **零门槛上手**：下载 → 双击 `setup.bat` → 浏览器里填 API → 开用。
 
-- **图形界面**：双击或一行命令启动 Web UI，自动打开浏览器，无需敲代码
-- **命令行**：每个工具也可独立运行，方便脚本集成
-- **统一配置**：所有工具的 API 地址、模型名称、参数集中在 `.env` 文件中管理
+一套调用 AI 大模型的实用工具集合：图片智能重命名、AI 图片质量筛选、漫展摄影选片、聊天记录 OCR 提取与压缩、长篇翻译、知识库问答、API 性能压测。**所有功能免费使用，数据不上传云端。**
 
 ---
 
-## 工具一览
+## 三步开始（用电脑就会）
 
-| 工具 | 文件 | 说明 |
-|------|------|------|
-| 图片重命名 | `image_tools/rename_images.py` | VLM 理解图片内容，自动生成中文短句文件名 |
-| 质量评分与分类 | `image_tools/detect_ai_errors.py` | 四维度 AI 评分 + 自动按比例分入高/低质量子文件夹 |
-| 截图 OCR | `image_tools/ocr_chat_screenshots.py` | 聊天记录长截图切片后 VLM 逐条识别输出文字 |
-| 聊天压缩 | `text_tools/compress_chat.py` | 超长聊天记录 txt 合并冗余时间戳，输出紧凑格式 |
-| 文本翻译 | `text_tools/translate.py` | 长篇小说按章节切分翻译，支持断点续传 |
-| 知识库问答 | `text_tools/chapter_summary.py` | FAISS + BM25 混合检索，多轮迭代问答 |
-| 性能压测 | `benchmarks/speedtest.py` | LLM 吞吐量测试，TTFT/ITTL 统计，绘制折线图 |
+### 第一步：下载 & 一键安装
+
+1. 下载本项目 ZIP 包并解压
+2. 双击 `setup.bat`
+3. 脚本自动检测 Python 环境 → 安装依赖 → 启动
+
+> 如果没有 Python，脚本会自动打开下载页面。安装 Python 时请勾选 **"Add Python to PATH"**。
+
+### 第二步：获取 AI 模型服务
+
+打开浏览器 `http://localhost:7860`，看「🏠 开始使用」页面，任选一种：
+
+| 方式 | 难度 | 费用 | 说明 |
+|------|------|------|------|
+| **LM Studio** | ⭐ 推荐 | 免费 | 下载软件 → 搜 qwen3 → 下载模型 → 点 Start Server |
+| **云端 API** | ⭐⭐ | 按量付费 | 硅基流动 / DeepSeek 注册 → 创建 Key → 填到设置里 |
+| **Ollama** | ⭐⭐⭐ | 免费 | 命令行工具，需一点技术基础 |
+
+> 推荐 LM Studio：[下载安装](https://lmstudio.ai/) → 搜 `qwen3.6-27b` 下载 → Local Server → Start Server。默认配置无需修改！
+
+### 第三步：填写配置 & 开用
+
+1. 切换到 **⚙️ 设置** 标签页
+2. 填写 API 地址（LM Studio 默认 `http://localhost:1234/v1`）
+3. 点 **🔗 测试连接** 确认连上
+4. 点 **💾 保存设置**
+5. 切到对应功能 Tab，点「📖 使用方法」看步骤，开始使用！
 
 ---
 
-## 快速开始
+## 功能一览
 
-### 1. 启动本地模型服务
+| 功能 | 适用场景 | 输入 → 输出 |
+|------|---------|-------------|
+| 🖼️ 图片重命名 | 整理图片素材 | 图片文件夹 → 中文短句文件名 |
+| 🔍 质量评分分类 | AI 图片筛选 / 漫展摄影选片 | 图片 → 自动分拣高/低质量文件夹 |
+| 💬 截图识别 | 聊天记录提取文字 | 长截图 → TXT 文本 |
+| 📝 聊天压缩 | 精简冗余聊天 | TXT → 紧凑格式 TXT |
+| 🌐 文本翻译 | 长文/小说翻译 | TXT → 翻译 TXT |
+| 📚 知识库问答 | 文档智能检索 | 问题 → AI 检索回答 |
+| ⚡ LLM 压测 | 测试 API 性能 | 参数 → 吞吐量图表 |
 
-确保本地运行着 OpenAI 兼容的 API：
+---
 
-- **LM Studio**：[下载](https://lmstudio.ai/) → 加载模型 → 启动 Local Server（默认 `http://localhost:1234/v1`）
-- **Ollama**：`ollama serve`（默认 `http://localhost:11434/v1`）
-- 或任何 OpenAI 兼容 API
+## 图片质量评分 — 双模式
 
-### 2. 安装
+| 模式 | 适用 | 检测重点 |
+|------|------|---------|
+| 🎨 AI 图片错误检测 | AI 生成图筛选 | 肢体/面部畸形、结构崩坏 |
+| 📸 漫展摄影筛选 | Cosplay 返图选片 | 对焦模糊、过曝欠曝、构图表情 |
 
-```bash
-git clone https://github.com/go-farther-and-farther/LocalAITools.git
-cd LocalAITools
-pip install -r requirements.txt
-```
+切换方式：Tab 2 顶部下拉框选择模式。
 
-### 3. 配置
+---
 
-```bash
-cp .env.example .env
-# 编辑 .env，填入你的 API 地址和密钥
-# 如果用本地 LM Studio，默认配置通常无需修改
-```
-
-### 4. 启动图形界面
-
-```bash
-python app.py
-# 自动打开浏览器 → http://localhost:7860
-```
-
-> **Windows 用户**：也可以直接双击 `run.bat` 启动，无需打开终端手动输入命令。如果启动失败，窗口不会消失，方便查看错误信息。
-
-![界面截图](img.png)
-
-### 5. 命令行用法（示例）
+## 命令行用法（可选，进阶用户）
 
 ```bash
 # 图片 AI 重命名
 python image_tools/rename_images.py -i data/images -w 4
 
-# 图片质量评分与分类（评分 + 自动分拣，一步完成）
+# 图片质量评分（默认 AI 错误检测模式，--mode photo 为摄影模式）
 python image_tools/detect_ai_errors.py data/images
 
 # 聊天截图 → 文字
@@ -77,7 +81,7 @@ python text_tools/compress_chat.py -i data/screenshots/texts
 # 长篇翻译
 python text_tools/translate.py -i data/texts/novel.txt -w 4
 
-# 知识库问答（需预先构建 FAISS 索引）
+# 知识库问答
 python text_tools/chapter_summary.py "你的问题" "可选关键词"
 
 # API 性能压测
@@ -86,79 +90,52 @@ python benchmarks/speedtest.py --url http://localhost:1234/v1 --model qwen3.6-35
 
 ---
 
+## 配置说明
+
+所有配置在 Web 界面的「⚙️ 设置」中修改，或直接编辑 `.env` 文件：
+
+```bash
+# API 连接
+OPENAI_BASE_URL=http://localhost:1234/v1    # LM Studio 默认，云端填对应地址
+OPENAI_API_KEY=lm-studio                     # 云端 API 填真实的 Key
+
+# 模型名称（按你下载的模型修改）
+VISION_MODEL=qwen/qwen3.6-27b              # 视觉模型，用于图片识别
+TEXT_MODEL=qwen/qwen3.5-9b                 # 文本模型，用于翻译压缩
+```
+
+---
+
+## 推荐模型
+
+| 用途 | 推荐模型 | 大小 |
+|------|---------|------|
+| 图片识别、质量评分 | `qwen3.6-27b` / `Qwen3-VL-30B` | ~16 GB |
+| 聊天截图 OCR | `qwen3.6-35b-a3b-Thinking` | ~20 GB |
+| 文本翻译、压缩 | `qwen3.5-9b` / `Qwen3-8B` | ~5 GB |
+| Embedding（知识库） | `bge-m3` / `bge-large-zh-v1.5` | ~2 GB |
+
+> 都在 LM Studio 搜索框里直接搜名字就能找到。
+
+---
+
 ## 目录结构
 
 ```
 LocalAITools/
-├── app.py                  # Gradio Web 界面入口
-├── run.bat                 # Windows 双击启动脚本
-├── config.py               # 统一配置模块
-├── .env.example            # 配置模板（复制为 .env）
-├── requirements.txt
+├── setup.bat               # 👈 双击这个一键安装
+├── run.bat                 # 已安装环境时快速启动
+├── app.py                  # Web 界面入口
+├── config.py               # 配置模块
+├── .env.example            # 配置模板
 │
-├── data/                   # 默认输入目录
-│   ├── images/             #   图片重命名、质量检测用
-│   ├── screenshots/        #   聊天截图识别用
-│   │   └── texts/          #   聊天记录压缩用
-│   ├── texts/              #   翻译输入用
-│   └── models/             #   HuggingFace 缓存
+├── data/                   # 输入目录
+│   ├── images/             #   放图片
+│   ├── screenshots/        #   放聊天截图
+│   └── texts/              #   放文本文件
 │
-├── outputs/                # 默认输出目录
-│   ├── translation/        #   翻译输出 + 进度
-│   ├── summaries/          #   知识库问答输出
-│   └── benchmarks/         #   压测结果 + 图表
-│
+├── outputs/                # 输出目录
 ├── image_tools/            # 图片处理工具
-├── text_tools/             # 文本处理 & 知识库工具
+├── text_tools/             # 文本 & 知识库工具
 └── benchmarks/             # 性能测试
-```
-
----
-
-## 配置说明
-
-编辑 `.env`（从 `.env.example` 复制）：
-
-```bash
-# API 连接
-OPENAI_BASE_URL=http://localhost:1234/v1
-OPENAI_API_KEY=lm-studio
-
-# 模型名称
-VISION_MODEL=qwen/qwen3.6-27b
-TEXT_MODEL=qwen/qwen3.5-9b
-
-# 输入/输出目录
-DATA_DIR=data
-OUTPUT_DIR=outputs
-
-# 并发与重试
-DEFAULT_WORKERS=2
-RETRY_TIMES=2
-```
-
-全部配置项见 `.env.example` 中的中文注释。
-
----
-
-## 典型场景
-
-### 整理截图
-
-```bash
-# 1. 截图放到 data/images
-# 2. AI 重命名
-python image_tools/rename_images.py -i data/images
-# 3. 质量评分 + 自动分拣（一步完成）
-python image_tools/detect_ai_errors.py data/images
-```
-
-### 整理聊天记录
-
-```bash
-# 1. 长截图放到 data/screenshots
-# 2. OCR 提取文字
-python image_tools/ocr_chat_screenshots.py -i data/screenshots
-# 3. 精简格式
-python text_tools/compress_chat.py -i data/screenshots/texts
 ```

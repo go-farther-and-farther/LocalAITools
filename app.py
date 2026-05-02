@@ -83,9 +83,9 @@ def _rename_images(input_dir, model, workers, dry_run):
 # ============================================================
 # Tab 2: 图片质量评分与分类（合并原 Tab 2 + Tab 3）
 # ============================================================
-def _detect_and_classify(input_dir):
+def _detect_and_classify(input_dir, mode):
     from image_tools.detect_ai_errors import process_and_classify
-    return _capture_log(process_and_classify, input_dir)
+    return _capture_log(process_and_classify, input_dir, mode)
 
 
 # ============================================================
@@ -390,6 +390,28 @@ def _check_and_update_on_startup():
         return f"✅ 当前已是最新版本 ({local})"
     return "⚠️ 无法检查更新（网络异常或非 git 环境）"
 
+def _test_api_connection(base_url, api_key, model):
+    """测试 API 连接是否正常"""
+    if not base_url.strip():
+        return "❌ 请填写 API 地址"
+    try:
+        from openai import OpenAI
+        client = OpenAI(base_url=base_url.strip(), api_key=api_key.strip() or "no-key")
+        models = client.models.list()
+        model_names = [m.id for m in models]
+        snippet = ", ".join(model_names[:8])
+        lines = [f"✅ 连接成功！找到 {len(model_names)} 个模型"]
+        if model_names:
+            lines.append(f"可用模型示例: {snippet}{'...' if len(model_names) > 8 else ''}")
+        if model.strip() and model.strip() not in model_names:
+            lines.append(f"⚠️ 注意: 当前配置的模型「{model.strip()}」不在可用列表中")
+        return "\n".join(lines)
+    except Exception as e:
+        msg = str(e)
+        if "Connection" in msg or "refused" in msg.lower():
+            return f"❌ 无法连接到 {base_url}\n请确认：\n1. LM Studio 或其他 API 服务是否已启动\n2. 地址和端口是否正确"
+        return f"❌ 连接失败: {msg}"
+
 # ============================================================
 # 构建 Gradio 界面
 # ============================================================
@@ -401,23 +423,79 @@ def build_ui():
     """
     with gr.Blocks(title="LocalAITools", css=css, theme=gr.themes.Soft()) as app:
         gr.Markdown("# LocalAITools - 本地 AI 工具箱")
-        gr.Markdown("""所有工具均调用本地大模型（兼容 OpenAI API），请在 `.env` 中配置 API 地址和密钥。
+
+        # ==================== Tab 0: 开始使用（新手引导） ====================
+        with gr.Tab("🏠 开始使用"):
+            gr.Markdown(_make_title("欢迎使用 LocalAITools！"))
+            gr.Markdown("一套调用本地大模型的 AI 工具集，**所有功能免费、数据不上传云端**。")
+
+            gr.Markdown("---")
+
+            gr.Markdown("### 🔌 第一步：获取 AI 模型服务")
+
+            gr.Markdown("""本工具需要连接一个 AI 模型服务才能工作。推荐以下方式（任选一种）：
+
+**🟢 方式一：LM Studio（推荐新手）**
+1. 下载安装 [LM Studio](https://lmstudio.ai/)（支持 Windows / Mac）
+2. 打开 LM Studio，在搜索框搜 `qwen3` 或 `qwen3.6`
+3. 下载一个视觉模型（如 `qwen3.6-27b`，约 16 GB）
+4. 切换到 **Local Server** 标签页，点击 **Start Server**
+5. 默认地址就是 `http://localhost:1234/v1`，无需修改
+
+**🟡 方式二：云端 API（免下载模型，需付费）**
+1. [硅基流动 SiliconFlow](https://cloud.siliconflow.cn/) — 注册送额度，支持 Qwen 系列
+2. [DeepSeek 开放平台](https://platform.deepseek.com/) — 便宜好用
+3. [阿里云百炼](https://bailian.console.aliyun.com/) — Qwen 官方 API
+4. 注册后在后台创建 API Key，填入下方的 API 地址和密钥
+
+**🟢 方式三：Ollama（进阶用户）**
+```bash
+ollama serve          # 启动服务
+ollama pull qwen3     # 下载模型
+```
+默认地址 `http://localhost:11434/v1`
+""")
+
+            gr.Markdown("---")
+
+            gr.Markdown("### ⚙️ 第二步：填写配置")
+            gr.Markdown("""切换到 **⚙️ 设置** 标签页，填写你的 API 信息：
+
+- **API 地址**：LM Studio 默认 `http://localhost:1234/v1`，云端 API 填对应地址
+- **API 密钥**：本地服务填任意值（如 `lm-studio`），云端 API 填真实的 Key
+- 填好后点 **💾 保存设置**，然后点 **🔗 测试连接** 确认能连上
+
+> 💡 如果使用 LM Studio，默认配置**无需修改**，直接测试连接即可！""")
+
+            gr.Markdown("---")
+
+            gr.Markdown("### 🎯 第三步：开始使用")
+            gr.Markdown("""配置完成后，切换到对应的功能标签页即可使用：
 
 | Tab | 功能 | 需要什么模型 | 输入 → 输出 |
 |-----|------|-------------|-------------|
 | 🖼️ 图片重命名 | AI 看图起中文名 | 视觉模型 | 图片文件夹 → 文件重命名 |
-| 🔍 质量评分分类 | 四维评分 + 自动分拣 | 视觉模型 | 图片文件夹 → HighQuality / LowQuality_Errors |
+| 🔍 质量评分分类 | 评分 + 自动分拣 | 视觉模型 | 图片文件夹 → HighQuality / LowQuality_Errors |
 | 💬 截图识别 | 聊天截图 → 文字 | 视觉模型（Thinking 最佳） | 截图 → TXT 文件 |
 | 📝 聊天压缩 | 合并冗余时间戳 | 文本模型 | TXT → 精简 TXT |
 | 🌐 文本翻译 | 长篇章节翻译 | 文本模型 | TXT → 翻译 TXT |
-| 📚 知识库问答 | RAG 混合检索 | 文本模型 + Embedding 模型 | 问题 → 答案 |
-| ⚡ LLM 压测 | API 吞吐量测试 | 被测模型 | 参数 → 图表 |""")
+| 📚 知识库问答 | RAG 混合检索 | 文本 + Embedding | 问题 → 答案 |
+| ⚡ LLM 压测 | API 吞吐量测试 | 被测模型 | 参数 → 图表 |
+
+> 💡 每个标签页顶部都有「📖 使用方法」折叠面板，点开即可查看详细步骤。
+""")
+
+            gr.Markdown("---")
+            gr.Markdown('<div style="text-align:center;color:#888;font-size:0.85em">'
+                        '遇到问题？<a href="https://github.com/go-farther-and-farther/LocalAITools/issues" target="_blank">GitHub Issues</a>'
+                        '</div>')
 
         # ==================== Tab 1: 图片重命名 ====================
         with gr.Tab("🖼️ 图片重命名"):
             gr.Markdown(_make_title("图片 AI 重命名 — 用中文短句替代杂乱的文件名"))
-            gr.Markdown("**使用步骤：** ① 把图片放进文件夹 → ② 点「开始重命名」→ ③ 文件名变成中文描述短语\n\n"
-                        "> 💡 建议先勾选「试运行」预览效果，满意后再取消勾选正式改名。")
+            with gr.Accordion("📖 使用方法", open=False):
+                gr.Markdown("**步骤：** ① 把图片放进文件夹 → ② 点「开始重命名」→ ③ 文件名变成中文描述短语\n\n"
+                            "> 💡 建议先勾选「试运行」预览效果，满意后再取消勾选正式改名。")
             with gr.Row():
                 with gr.Column(scale=2):
                     rn_input = gr.Textbox(label="图片文件夹",
@@ -439,13 +517,22 @@ def build_ui():
 
         # ==================== Tab 2: 图片质量评分与分类 ====================
         with gr.Tab("🔍 图片质量评分与分类"):
-            gr.Markdown(_make_title("AI 评分 + 自动分拣 — 四维度评估，高分/低分图片自动归类"))
-            gr.Markdown("**使用步骤：** ① 把图片放进文件夹 → ② 点「开始评分分类」→ ③ 优质图片自动移至 `HighQuality/`，劣质/错误图片移至 `LowQuality_Errors/`\n\n"
-                        "**评分标准：** 真实感 / 艺术性 / 细节协调 / 清晰度，每项综合评分 0.0-10.0 分\n"
-                        f"> 📊 前 **{config.TOP_PERCENT*100:.0f}%** 高分 → `{config.HIGH_QUALITY_FOLDER}/`，后 **{config.BOTTOM_PERCENT*100:.0f}%** 低分 + 错误 → `{config.LOW_QUALITY_ERRORS_FOLDER}/`\n"
-                        "> 💡 每张图会生成同名 `.txt` 评分文件，方便核对")
+            gr.Markdown(_make_title("AI 评分 + 自动分拣 — 多维度评估，高分/低分图片自动归类"))
+            with gr.Accordion("📖 使用方法", open=False):
+                gr.Markdown("**步骤：** ① 选择检测模式 → ② 把图片放进文件夹 → ③ 点「开始评分分类」→ 优质图片自动移至 `HighQuality/`，劣质/错误图片移至 `LowQuality_Errors/`\n\n"
+                            "**两种模式：**\n"
+                            "- 🎨 **AI 图片错误检测** — 检测 AI 生成图的肢体错乱、面部畸形、结构崩坏等问题\n"
+                            "- 📸 **漫展摄影筛选** — 检测跑焦模糊、过曝欠曝等拍摄问题，筛选可出片的 Cosplay 照片\n\n"
+                            f"> 📊 前 **{config.TOP_PERCENT*100:.0f}%** 高分 → `{config.HIGH_QUALITY_FOLDER}/`，后 **{config.BOTTOM_PERCENT*100:.0f}%** 低分 + 错误 → `{config.LOW_QUALITY_ERRORS_FOLDER}/`\n"
+                            "> 💡 每张图会生成同名 `.txt` 评分文件，方便核对")
             with gr.Row():
                 with gr.Column(scale=2):
+                    de_mode = gr.Dropdown(
+                        label="检测模式",
+                        choices=[("🎨 AI 图片错误检测", "ai"), ("📸 漫展摄影筛选", "photo")],
+                        value="ai",
+                        info="AI 错误检测：找肢体畸形/结构崩坏 | 漫展摄影：找跑焦/过曝/欠曝"
+                    )
                     de_input = gr.Textbox(label="图片文件夹",
                                           value=str(config.DATA_DIR / "images"),
                                           placeholder="粘贴图片所在文件夹的完整路径",
@@ -454,14 +541,15 @@ def build_ui():
                 with gr.Column(scale=3):
                     de_output = gr.Textbox(label="处理日志", lines=15, elem_classes="output-text",
                                            placeholder="处理完成后这里会显示每张图的评分和分类结果...")
-            de_btn.click(_detect_and_classify, [de_input], [de_output])
+            de_btn.click(_detect_and_classify, [de_input, de_mode], [de_output])
 
         # ==================== Tab 3: 聊天截图识别 ====================
         with gr.Tab("💬 聊天截图识别"):
             gr.Markdown(_make_title("聊天记录长截图 → 文字提取 — 切片 + VLM 识别"))
-            gr.Markdown("**使用步骤：** ① 把微信/QQ 聊天长截图放进文件夹 → ② 点「开始识别」→ ③ 去 `chat_text_output/` 找生成的 TXT 文件\n\n"
-                        "> 💡 长图会被自动切成 2000px 高的薄片，每片之间有 400px 重叠防止漏字\n"
-                        "> 💡 建议使用 **Thinking 模型**（如 qwen3.6-35b-a3b-Thinking），识别更准确")
+            with gr.Accordion("📖 使用方法", open=False):
+                gr.Markdown("**步骤：** ① 把微信/QQ 聊天长截图放进文件夹 → ② 点「开始识别」→ ③ 去 `chat_text_output/` 找生成的 TXT 文件\n\n"
+                            "> 💡 长图会被自动切成 2000px 高的薄片，每片之间有 400px 重叠防止漏字\n"
+                            "> 💡 建议使用 **Thinking 模型**（如 qwen3.6-35b-a3b-Thinking），识别更准确")
             with gr.Row():
                 with gr.Column(scale=2):
                     ei_input = gr.Textbox(label="截图文件夹",
@@ -488,9 +576,10 @@ def build_ui():
         # ==================== Tab 4: 聊天记录压缩 ====================
         with gr.Tab("📝 聊天记录压缩"):
             gr.Markdown(_make_title("聊天记录 txt 文件 → 精简格式化"))
-            gr.Markdown("**使用步骤：** ① 把截图 OCR 生成的 TXT（或任意聊天记录 TXT）放进文件夹 → ② 点「开始压缩」→ ③ 得到 `.compressed.txt` 文件\n\n"
-                        "> 💡 压缩会合并连续相同说话人的时间戳，移除系统消息等冗余内容，保留所有对话实质\n"
-                        "> 📎 **典型流程：** 截图 → Tab 3 识别 → 本 Tab 压缩 → 得到干净对话文本")
+            with gr.Accordion("📖 使用方法", open=False):
+                gr.Markdown("**步骤：** ① 把截图 OCR 生成的 TXT（或任意聊天记录 TXT）放进文件夹 → ② 点「开始压缩」→ ③ 得到 `.compressed.txt` 文件\n\n"
+                            "> 💡 压缩会合并连续相同说话人的时间戳，移除系统消息等冗余内容，保留所有对话实质\n"
+                            "> 📎 **典型流程：** 截图 → Tab 3 识别 → 本 Tab 压缩 → 得到干净对话文本")
             with gr.Row():
                 with gr.Column(scale=2):
                     ct_input = gr.Textbox(label="输入文件/文件夹",
@@ -518,10 +607,11 @@ def build_ui():
         # ==================== Tab 5: 文本翻译 ====================
         with gr.Tab("🌐 文本翻译"):
             gr.Markdown(_make_title("长篇文本翻译 — 按章节切分，断点续传"))
-            gr.Markdown("**使用步骤：** ① 把要翻译的文本文件路径填好 → ② 点「开始翻译」→ ③ 去 `outputs/translation/` 找译文\n\n"
-                        "> 💡 自动识别「第X章」「Chapter」等章节标记，按章节切分翻译\n"
-                        "> 💡 支持**断点续传**：中途中断后重新点开始，会接着上次进度继续\n"
-                        "> 💡 目标语言在 `.env` 中设置（默认 `English`）")
+            with gr.Accordion("📖 使用方法", open=False):
+                gr.Markdown("**步骤：** ① 把要翻译的文本文件路径填好 → ② 点「开始翻译」→ ③ 去 `outputs/translation/` 找译文\n\n"
+                            "> 💡 自动识别「第X章」「Chapter」等章节标记，按章节切分翻译\n"
+                            "> 💡 支持**断点续传**：中途中断后重新点开始，会接着上次进度继续\n"
+                            "> 💡 目标语言在 `.env` 中设置（默认 `English`）")
             with gr.Row():
                 with gr.Column(scale=2):
                     tr_input = gr.Textbox(label="输入文件",
@@ -548,11 +638,12 @@ def build_ui():
         # ==================== Tab 6: 知识库问答 ====================
         with gr.Tab("📚 知识库问答"):
             gr.Markdown(_make_title("RAG 知识库问答 — FAISS + BM25 混合检索，多轮迭代回答"))
-            gr.Markdown("**使用步骤：** ① 预先用文档构建好 FAISS 索引（`.env` 中配置 `FAISS_INDEX_PATH`）→ ② 输入问题 → ③ 点「开始查询」→ ④ LLM 基于检索到的相关段落多轮迭代生成答案\n\n"
-                        "> 🔍 **混合检索：** 向量相似度 + BM25 关键词匹配，比纯向量检索更准\n"
-                        "> 🔄 **多轮迭代：** 查一批 → 回答 → 带着上一轮答案查下一批 → 不断修正完善\n"
-                        "> ⚠️ 首次查询需要加载 Embedding 模型和索引，可能等待几十秒\n"
-                        "> 💡 关键词过滤选填：如果你知道答案一定包含某个词，填上可大幅提高精度")
+            with gr.Accordion("📖 使用方法", open=False):
+                gr.Markdown("**步骤：** ① 预先用文档构建好 FAISS 索引（`.env` 中配置 `FAISS_INDEX_PATH`）→ ② 输入问题 → ③ 点「开始查询」→ ④ LLM 基于检索到的相关段落多轮迭代生成答案\n\n"
+                            "> 🔍 **混合检索：** 向量相似度 + BM25 关键词匹配，比纯向量检索更准\n"
+                            "> 🔄 **多轮迭代：** 查一批 → 回答 → 带着上一轮答案查下一批 → 不断修正完善\n"
+                            "> ⚠️ 首次查询需要加载 Embedding 模型和索引，可能等待几十秒\n"
+                            "> 💡 关键词过滤选填：如果你知道答案一定包含某个词，填上可大幅提高精度")
             with gr.Row():
                 with gr.Column(scale=2):
                     kb_query = gr.Textbox(label="查询问题",
@@ -579,10 +670,11 @@ def build_ui():
         # ==================== Tab 7: LLM 压测 ====================
         with gr.Tab("⚡ LLM 压测"):
             gr.Markdown(_make_title("LLM 吞吐量压测 — 测试 API 性能并生成图表"))
-            gr.Markdown("**使用步骤：** ① 确认 API 地址和模型名称 → ② 点「开始压测」→ ③ 查看吞吐量图表，找到模型性能瓶颈\n\n"
-                        "> 📊 **测量指标：** TTFT（首 Token 延迟）、ITTL（Token 间延迟）、Prefill 吞吐量、Decode 吞吐量\n"
-                        "> ⏱️ 压测会占用模型全部资源，建议在空闲时运行\n"
-                        "> 📈 结果自动保存到 `outputs/benchmarks/`")
+            with gr.Accordion("📖 使用方法", open=False):
+                gr.Markdown("**步骤：** ① 确认 API 地址和模型名称 → ② 点「开始压测」→ ③ 查看吞吐量图表，找到模型性能瓶颈\n\n"
+                            "> 📊 **测量指标：** TTFT（首 Token 延迟）、ITTL（Token 间延迟）、Prefill 吞吐量、Decode 吞吐量\n"
+                            "> ⏱️ 压测会占用模型全部资源，建议在空闲时运行\n"
+                            "> 📈 结果自动保存到 `outputs/benchmarks/`")
             with gr.Row():
                 with gr.Column(scale=2):
                     bm_url = gr.Textbox(label="API Base URL", value=config.OPENAI_BASE_URL,
@@ -653,6 +745,24 @@ def build_ui():
                 return _save_env(updates)
 
             save_btn.click(_on_save, _input_widgets, [save_msg])
+
+            # ---- API 连接测试 ----
+            gr.Markdown("---")
+            gr.Markdown(_make_title("🔗 API 连接测试"))
+            gr.Markdown("测试你的 API 地址和密钥是否能正常连接，并列出可用模型。")
+
+            with gr.Group():
+                test_base = gr.Textbox(label="API 地址", value=config.OPENAI_BASE_URL,
+                                       info="与上方「API 连接」分组中的地址保持一致")
+                test_key = gr.Textbox(label="API 密钥", value=config.OPENAI_API_KEY, type="password",
+                                      info="本地服务填任意值即可")
+                test_model = gr.Textbox(label="模型名称（可选）", value=config.VISION_MODEL,
+                                        info="测试时仅检查该模型是否在可用列表中，留空则只列出模型")
+                test_btn = gr.Button("🔗 测试连接", variant="secondary")
+                test_msg = gr.Textbox(label="测试结果", interactive=False, lines=5, elem_classes="output-text",
+                                      placeholder="测试结果会显示在这里...")
+
+            test_btn.click(_test_api_connection, [test_base, test_key, test_model], [test_msg])
 
             # ---- 手动更新区域 ----
             gr.Markdown("---")
