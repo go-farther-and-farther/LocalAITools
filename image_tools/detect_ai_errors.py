@@ -27,16 +27,17 @@ logging.basicConfig(
     datefmt='%H:%M:%S'
 )
 
-# ================= 初始化模型 =================
-llm = ChatOpenAI(
-    model=config.VISION_MODEL,
-    openai_api_key=config.OPENAI_API_KEY,
-    base_url=config.OPENAI_BASE_URL,
-    temperature=0.2,
-    max_tokens=256,
-    timeout=config.REQUEST_TIMEOUT_SHORT,
-    extra_body=config.get_llm_extra_body()
-)
+# ================= 模型（每次创建新实例，确保读取最新的 ENABLE_THINKING 配置） =================
+def _get_llm():
+    return ChatOpenAI(
+        model=config.VISION_MODEL,
+        openai_api_key=config.OPENAI_API_KEY,
+        base_url=config.OPENAI_BASE_URL,
+        temperature=0.2,
+        max_tokens=2048,  # 需要足够大以容纳思考 tokens + 输出 tokens
+        timeout=config.REQUEST_TIMEOUT_SHORT,
+        extra_body=config.get_llm_extra_body()
+    )
 
 AI_ERROR_PROMPT = """你是一个专业的图像质量评审。请综合以下四个维度，对图片进行 0.0~10.0 的评分（精确一位小数），并给出简要点评。
 
@@ -150,7 +151,7 @@ def detect_image_quality(image_path: Path, mode: str = "ai", custom_prompt: str 
                     }
                 }
             ])
-            response = llm.invoke([message])
+            response = _get_llm().invoke([message])
             result = response.content.strip()
 
             if result.startswith("OK:"):

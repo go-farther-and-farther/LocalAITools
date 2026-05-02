@@ -70,15 +70,21 @@ AUTO_UPDATE = os.getenv("AUTO_UPDATE", "true").lower() == "true"
 # 是否启用模型的思考/推理模式（Thinking/Reasoning）。
 # 关闭后模型直接输出结果，速度更快，适合简单任务。
 # 对不支持思考模式的模型，此选项无效（不会报错）。
-ENABLE_THINKING = os.getenv("ENABLE_THINKING", "true").lower() == "true"
-
+# 注意：每次调用 get_llm_extra_body() 时动态读取环境变量，
+# 确保修改 .env 后重新创建的 LLM 实例能生效。
 def get_llm_extra_body() -> dict:
-    """返回 ChatOpenAI 的 extra_body 参数，用于控制思考模式"""
-    if not ENABLE_THINKING:
+    """返回 ChatOpenAI 的 extra_body 参数，用于控制思考模式。
+    每次调用时重新读取环境变量（非缓存），确保设置变更后生效。"""
+    import os as _os
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv(override=True)
+    enabled = _os.getenv("ENABLE_THINKING", "true").lower() == "true"
+    if not enabled:
         return {
             "thinking": False,
             "enable_thinking": False,
             "reasoning": False,
+            "think": False,       # llama.cpp / LM Studio 可能用这个键名
         }
     return {}
 
