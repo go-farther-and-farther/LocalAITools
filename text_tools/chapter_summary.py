@@ -1,5 +1,6 @@
 import os
 import sys
+import threading
 from pathlib import Path
 from typing import List, Optional
 
@@ -8,6 +9,12 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 import config
+
+_stop_flag = threading.Event()
+
+def request_stop():
+    """请求停止当前正在执行的知识库查询任务"""
+    _stop_flag.set()
 
 from langchain_core.prompts import PromptTemplate
 from rank_bm25 import BM25Okapi
@@ -155,8 +162,12 @@ def query_knowledge_base(
         extra_body=config.get_llm_extra_body()
     )
 
+    _stop_flag.clear()
     answers: List[str] = []
     for round_idx, batch in enumerate(batches, start=1):
+        if _stop_flag.is_set():
+            _log("⏹️ 已请求停止查询")
+            break
         info_text = "\n\n".join(d.page_content for d in batch)
         if round_idx == 1:
             prompt = PromptTemplate.from_template(PROMPT_R1).format(
@@ -170,6 +181,8 @@ def query_knowledge_base(
         answers.append(llm.invoke(prompt).content)
 
     # assemble output
+    if not answers:
+        return "查询已被停止，未生成任何回答。"
     lines = [f"## 最终回答\n\n{answers[-1]}"]
     if len(answers) > 1:
         lines.append("\n---\n## 各轮迭代记录")

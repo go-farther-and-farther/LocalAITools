@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-LLM 吞吐量压测 + 可视化图表生成
+LLM 吞吐量压测 + 专业报告图表生成
 - 支持任意 OpenAI 兼容 API
 - 自动处理非标准模型名（tiktoken fallback）
-- 输出表格、百分位统计，并绘制双折线图
+- 输出表格、百分位统计，生成 2x2 专业报告图
 """
 
 import sys
@@ -21,7 +21,10 @@ import config
 
 import requests
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
 
 # -------------------- 配置默认值 --------------------
 DEFAULT_BASE_URL = config.OPENAI_BASE_URL
@@ -32,10 +35,29 @@ DEFAULT_CONCURRENCY = config.DEFAULT_WORKERS
 DEFAULT_OUTPUT_TOKENS = 512
 FALLBACK_ENCODING = "cl100k_base"
 
+_stop_flag = threading.Event()
+
+def request_stop():
+    """请求停止当前正在执行的压测任务"""
+    _stop_flag.set()
+
 # 默认测试的提示词长度 (tokens)
 DEFAULT_TOKEN_LENGTHS = [512, 1024, 2048, 4096]
 
-# -------------------- Token 计数与文本生成（修复版）--------------------
+# -------------------- 中文字体配置 --------------------
+def _setup_chinese_font():
+    """自动检测并配置中文字体"""
+    _available = {f.name for f in fm.fontManager.ttflist}
+    for _fc in ['Microsoft YaHei', 'SimHei', 'STSong', 'FangSong', 'WenQuanYi Micro Hei', 'Noto Sans CJK SC']:
+        if _fc in _available:
+            plt.rcParams['font.sans-serif'] = [_fc, 'DejaVu Sans']
+            return _fc
+    plt.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'SimHei', 'DejaVu Sans']
+    return 'DejaVu Sans'
+
+plt.rcParams['axes.unicode_minus'] = False
+
+# -------------------- Token 计数与文本生成 --------------------
 def generate_prompt_text(target_tokens: int, model: str = "gpt-3.5-turbo") -> str:
     """生成接近指定 token 数量的文本（自动回退编码）"""
     try:
@@ -56,7 +78,6 @@ def generate_prompt_text(target_tokens: int, model: str = "gpt-3.5-turbo") -> st
         tokens = enc.encode(full_text)[:target_tokens]
         return enc.decode(tokens)
     except ImportError:
-        # 无 tiktoken 时的粗略估算
         base = "The quick brown fox jumps over the lazy dog. "
         repeats = max(1, target_tokens // 10)
         return base * repeats
@@ -82,10 +103,10 @@ def call_api_stream(
     timeout: int,
     max_tokens: int = 512,
     temperature: float = 0.0,
-) -> Tuple[float, float, int, int, bool, str]:
+) -> Tuple[float, float, int, int, bool, str, List[float]]:
     """
     返回：
-        tftt (ms), ittl_mean (ms), prompt_tokens, completion_tokens, success, error_msg
+        tftt (ms), ittl_mean (ms), prompt_tokens, completion_tokens, success, error_msg, token_intervals
     """
     url = f"{base_url.rstrip('/')}/chat/completions"
     headers = {
@@ -112,7 +133,7 @@ def call_api_stream(
         with requests.post(url, headers=headers, json=payload, timeout=timeout, stream=True) as resp:
             if resp.status_code != 200:
                 error_msg = f"HTTP {resp.status_code}: {resp.text[:200]}"
-                return 0, 0, 0, 0, False, error_msg
+                return 0, 0, 0, 0, False, error_msg, []
 
             for line in resp.iter_lines(decode_unicode=True):
                 if not line or line.startswith(":"):
@@ -141,19 +162,18 @@ def call_api_stream(
 
     except Exception as e:
         error_msg = str(e)
-        return 0, 0, 0, 0, False, error_msg
+        return 0, 0, 0, 0, False, error_msg, []
 
     if first_token_time is None:
         error_msg = "No tokens received"
-        return 0, 0, 0, 0, False, error_msg
+        return 0, 0, 0, 0, False, error_msg, []
 
     tftt = (first_token_time - start_time) * 1000
 
+    intervals = []
     if len(token_times) > 1:
         intervals = [(token_times[i] - token_times[i-1]) * 1000 for i in range(1, len(token_times))]
-        ittl_mean = sum(intervals) / len(intervals)
-    else:
-        ittl_mean = 0.0
+    ittl_mean = sum(intervals) / len(intervals) if intervals else 0.0
 
     if prompt_tokens == 0:
         prompt_tokens = count_tokens(prompt, model)
@@ -161,7 +181,7 @@ def call_api_stream(
         completion_tokens = len(token_times)
 
     success = True
-    return tftt, ittl_mean, prompt_tokens, completion_tokens, success, error_msg
+    return tftt, ittl_mean, prompt_tokens, completion_tokens, success, error_msg, intervals
 
 def run_single_test(
     target_tokens: int,
@@ -172,7 +192,7 @@ def run_single_test(
     output_tokens: int = 512,
 ) -> Dict:
     prompt = generate_prompt_text(target_tokens, model)
-    tftt, ittl, prompt_toks, out_toks, success, err = call_api_stream(
+    tftt, ittl, prompt_toks, out_toks, success, err, intervals = call_api_stream(
         prompt, base_url, model, api_key, timeout, output_tokens
     )
 
@@ -188,7 +208,8 @@ def run_single_test(
         "prefill_throughput": prefill_speed,
         "output_throughput": output_speed,
         "success": success,
-        "error": err if not success else ""
+        "error": err if not success else "",
+        "intervals": intervals
     }
 
 def run_concurrent_tests(
@@ -199,19 +220,28 @@ def run_concurrent_tests(
     api_key: str,
     timeout: int,
     output_tokens: int = 512,
+    progress_callback=None,
 ) -> List[Dict]:
     results = []
     lock = threading.Lock()
+    done_count = [0]
 
     def worker():
         res = run_single_test(target_tokens, base_url, model, api_key, timeout, output_tokens)
         with lock:
             results.append(res)
+            done_count[0] += 1
+            if progress_callback:
+                progress_callback(done_count[0], concurrency)
         return res
 
     with ThreadPoolExecutor(max_workers=concurrency) as executor:
         futures = [executor.submit(worker) for _ in range(concurrency)]
         for future in as_completed(futures):
+            if _stop_flag.is_set():
+                executor.shutdown(wait=False, cancel_futures=True)
+                print("   ⏹️ 已请求停止")
+                break
             try:
                 future.result()
             except Exception as e:
@@ -219,65 +249,259 @@ def run_concurrent_tests(
 
     return results
 
-# -------------------- 绘图函数 --------------------
+# ==================== 专业报告图表 ====================
 def plot_results(
-    token_lengths: List[int],
-    prefill_vals: List[float],
-    decode_vals: List[float],
+    detailed_results: List[Dict],
     concurrency: int,
     timeout: int,
+    model_name: str = "",
+    total_duration: float = 0.0,
     save_path: str = "throughput_chart.png"
 ):
-    """绘制双子图：预填充吞吐 & 输出吞吐，并标注百分位"""
-    plt.rcParams['font.sans-serif'] = ['DejaVu Sans', 'Arial', 'sans-serif']
-    plt.rcParams['axes.unicode_minus'] = False
+    """生成 2x2 专业性能报告图：TTFT百分位、输出吞吐量、ITTL、输出稳定性"""
+    _setup_chinese_font()
 
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
-    fig.suptitle(f'Throughput vs Prompt Length (Concurrency={concurrency}, Timeout={timeout}s)',
-                 fontsize=14, fontweight='bold')
+    # ---- 收集数据 ----
+    token_lengths = []
+    ttft_data = []      # 每个长度的所有成功请求 TTFT
+    ittl_data = []      # 每个长度的所有成功请求 ITTL
+    prefill_data = []   # 每个长度的平均预填充吞吐
+    decode_data = []    # 每个长度的所有成功请求 输出吞吐
+    all_intervals = []  # 每个长度的所有 ITTL 间隔
 
-    # 百分位数
-    p_pre = np.percentile(prefill_vals, [50, 90, 95])
-    p_out = np.percentile(decode_vals, [50, 90, 95])
+    for entry in detailed_results:
+        successes = [r for r in entry["results"] if r["success"]]
+        if not successes:
+            continue
+        token_lengths.append(entry["target_tokens"])
+        ttft_data.append([r["tftt_ms"] for r in successes])
+        ittl_data.append([r["ittl_mean_ms"] for r in successes])
+        prefill_data.append([r["prefill_throughput"] for r in successes])
+        decode_data.append([r["output_throughput"] for r in successes])
+        entry_intervals = []
+        for r in successes:
+            entry_intervals.extend(r.get("intervals", []))
+        all_intervals.append(entry_intervals if entry_intervals else [0])
 
-    # 上图：预填充
-    ax1.plot(token_lengths, prefill_vals, marker='o', linestyle='-', linewidth=2,
-             color='steelblue', label='Prefill Throughput')
-    ax1.axhline(p_pre[0], color='gray', linestyle='--', alpha=0.7, label=f"P50: {p_pre[0]:.1f}")
-    ax1.axhline(p_pre[1], color='orange', linestyle='--', alpha=0.7, label=f"P90: {p_pre[1]:.1f}")
-    ax1.axhline(p_pre[2], color='red', linestyle='--', alpha=0.7, label=f"P95: {p_pre[2]:.1f}")
-    ax1.set_ylabel('Prefill Throughput (tokens/s)')
-    ax1.set_yscale('log')
-    ax1.grid(True, which='both', linestyle=':', alpha=0.6)
-    ax1.legend(loc='best')
-    textstr = f'Range: {min(prefill_vals):.0f} - {max(prefill_vals):.0f}\nMean: {np.mean(prefill_vals):.0f}'
-    props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
-    ax1.text(0.98, 0.95, textstr, transform=ax1.transAxes, fontsize=9,
-             verticalalignment='top', horizontalalignment='right', bbox=props)
+    if not token_lengths:
+        print("⚠️ 没有成功的测试数据，无法绘图")
+        return
 
-    # 下图：输出
-    ax2.plot(token_lengths, decode_vals, marker='s', linestyle='-', linewidth=2,
-             color='darkgreen', label='Decode Throughput')
-    ax2.axhline(p_out[0], color='gray', linestyle='--', alpha=0.7, label=f"P50: {p_out[0]:.1f}")
-    ax2.axhline(p_out[1], color='orange', linestyle='--', alpha=0.7, label=f"P90: {p_out[1]:.1f}")
-    ax2.axhline(p_out[2], color='red', linestyle='--', alpha=0.7, label=f"P95: {p_out[2]:.1f}")
-    ax2.set_xlabel('Prompt Length (tokens)')
-    ax2.set_ylabel('Decode Throughput (tokens/s)')
-    ax2.set_xscale('log', base=2)
-    ax2.grid(True, which='both', linestyle=':', alpha=0.6)
-    ax2.legend(loc='best')
-    textstr2 = f'Range: {min(decode_vals):.0f} - {max(decode_vals):.0f}\nMean: {np.mean(decode_vals):.0f}'
-    ax2.text(0.98, 0.95, textstr2, transform=ax2.transAxes, fontsize=9,
-             verticalalignment='top', horizontalalignment='right', bbox=props)
+    # ---- 样式配置 ----
+    try:
+        plt.style.use('ggplot')
+    except Exception:
+        pass
 
-    ax2.set_xticks(token_lengths)
-    ax2.set_xticklabels([str(p) for p in token_lengths], rotation=45, ha='right')
-    ax2.set_xlim(token_lengths[0], token_lengths[-1])
+    # 配色方案
+    C_RED = '#E74C3C'
+    C_BLUE = '#3498DB'
+    C_GREEN = '#27AE60'
+    C_PURPLE = '#8E44AD'
+    C_ORANGE = '#F39C12'
+    C_DARK = '#2C3E50'
+    C_GRAY = '#95A5A6'
+    C_BG = '#FAFAFA'
 
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches='tight')
-    plt.show()
-    print(f"📈 图表已保存: {save_path}")
+    fig = plt.figure(figsize=(16, 11), facecolor='white')
+
+    # ---- 顶部标题区域 ----
+    ax_title = fig.add_axes([0, 0.92, 1, 0.08], facecolor='white')
+    ax_title.axis('off')
+
+    # 获取实际输出 token 数
+    out_tok = "?"
+    for entry in detailed_results:
+        for r in entry["results"]:
+            if r["success"]:
+                out_tok = str(r.get("actual_output_tokens", "?"))
+                break
+        if out_tok != "?":
+            break
+
+    # 获取实际并发成功数
+    total_success = sum(
+        sum(1 for r in entry["results"] if r["success"])
+        for entry in detailed_results
+    )
+    total_tests = sum(len(entry["results"]) for entry in detailed_results)
+
+    from datetime import datetime
+    test_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    duration_str = f"{total_duration:.0f}秒" if total_duration > 0 else "N/A"
+
+    # 标题
+    ax_title.text(0.5, 0.75, '大模型推理性能测试报告', fontsize=22, fontweight='bold',
+                  color=C_DARK, ha='center', va='center', transform=ax_title.transAxes)
+
+    # 副标题信息
+    subtitle_parts = []
+    if model_name:
+        subtitle_parts.append(f'模型: {model_name}')
+    subtitle_parts.append(f'测试时间: {test_time}')
+    subtitle_parts.append(f'测试耗时: {duration_str}')
+    subtitle = '    |    '.join(subtitle_parts)
+    ax_title.text(0.5, 0.35, subtitle, fontsize=10, color=C_GRAY,
+                  ha='center', va='center', transform=ax_title.transAxes)
+
+    # 分隔线
+    ax_title.axhline(y=0.05, xmin=0.05, xmax=0.95, color=C_BLUE, linewidth=2, alpha=0.6)
+
+    # ---- 2x2 图表区域 ----
+    gs = fig.add_gridspec(2, 2, left=0.07, right=0.95, top=0.88, bottom=0.08,
+                          hspace=0.32, wspace=0.28)
+
+    # ========== 左上: TTFT 首Token延迟（百分位柱状图） ==========
+    ax1 = fig.add_subplot(gs[0, 0])
+    p50 = [np.percentile(d, 50) for d in ttft_data]
+    p90 = [np.percentile(d, 90) for d in ttft_data]
+    p95 = [np.percentile(d, 95) for d in ttft_data]
+
+    x = np.arange(len(token_lengths))
+    bar_w = 0.25
+    bars1 = ax1.bar(x - bar_w, p50, bar_w, label='P50', color=C_GREEN, alpha=0.85, edgecolor='white', linewidth=0.5)
+    bars2 = ax1.bar(x, p90, bar_w, label='P90', color=C_ORANGE, alpha=0.85, edgecolor='white', linewidth=0.5)
+    bars3 = ax1.bar(x + bar_w, p95, bar_w, label='P95', color=C_RED, alpha=0.85, edgecolor='white', linewidth=0.5)
+
+    # 柱子上方标注数值
+    for bars in [bars1, bars2, bars3]:
+        for bar in bars:
+            h = bar.get_height()
+            if h > 0:
+                ax1.text(bar.get_x() + bar.get_width()/2, h + max(p95)*0.01,
+                        f'{h:.0f}', ha='center', va='bottom', fontsize=7, fontweight='bold')
+
+    ax1.set_title('① 首 Token 延迟 (TTFT)', fontsize=12, fontweight='bold', color=C_DARK, pad=10)
+    ax1.set_ylabel('TTFT (ms)', fontsize=9)
+    ax1.set_xticks(x)
+    ax1.set_xticklabels([f'{t}' for t in token_lengths], fontsize=8)
+    ax1.set_xlabel('输入长度 (tokens)', fontsize=9)
+    ax1.legend(fontsize=8, loc='upper left', framealpha=0.8)
+    ax1.grid(True, axis='y', linestyle=':', alpha=0.3)
+    ax1.set_facecolor(C_BG)
+
+    # ========== 右上: 输出吞吐量（柱状图 + 均值线） ==========
+    ax2 = fig.add_subplot(gs[0, 1])
+    means_decode = [np.mean(d) for d in decode_data]
+    stds_decode = [np.std(d) for d in decode_data]
+
+    bars = ax2.bar(x, means_decode, 0.5, color=C_BLUE, alpha=0.85, edgecolor='white', linewidth=0.5)
+
+    # 误差线
+    ax2.errorbar(x, means_decode, yerr=stds_decode, fmt='none', ecolor=C_DARK,
+                elinewidth=1.5, capsize=4, capthick=1.2, alpha=0.6)
+
+    # 柱子上方标注
+    for i, (bar, m, s) in enumerate(zip(bars, means_decode, stds_decode)):
+        ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height() + max(means_decode)*0.02,
+                f'{m:.1f}', ha='center', va='bottom', fontsize=9, fontweight='bold', color=C_BLUE)
+
+    # 均值参考线
+    avg_decode = np.mean(means_decode)
+    ax2.axhline(avg_decode, color=C_RED, linestyle='--', alpha=0.6, linewidth=1.2)
+    ax2.text(len(token_lengths)-0.5, avg_decode + max(means_decode)*0.02,
+            f'平均: {avg_decode:.1f} tok/s', fontsize=8, color=C_RED, ha='right',
+            bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.8, edgecolor=C_RED))
+
+    ax2.set_title('② 输出吞吐量', fontsize=12, fontweight='bold', color=C_DARK, pad=10)
+    ax2.set_ylabel('吞吐量 (tok/s)', fontsize=9)
+    ax2.set_xticks(x)
+    ax2.set_xticklabels([f'{t}' for t in token_lengths], fontsize=8)
+    ax2.set_xlabel('输入长度 (tokens)', fontsize=9)
+    ax2.grid(True, axis='y', linestyle=':', alpha=0.3)
+    ax2.set_facecolor(C_BG)
+
+    # ========== 左下: 预填充吞吐量（散点 + 连线） ==========
+    ax3 = fig.add_subplot(gs[1, 0])
+    means_prefill = [np.mean(d) for d in prefill_data]
+    stds_prefill = [np.std(d) for d in prefill_data]
+    mins_prefill = [np.min(d) for d in prefill_data]
+    maxs_prefill = [np.max(d) for d in prefill_data]
+
+    # 范围带
+    ax3.fill_between(x, mins_prefill, maxs_prefill, alpha=0.12, color=C_GREEN)
+    # 散点
+    for i, (xi, ys) in enumerate(zip(x, prefill_data)):
+        if len(ys) > 1:
+            jitter = np.random.default_rng(42).normal(0, 0.06, len(ys))
+            ax3.scatter([xi]*len(ys) + jitter, ys, alpha=0.45, s=20, color=C_GREEN, edgecolors='none', zorder=3)
+        else:
+            ax3.scatter(xi, ys[0], alpha=0.7, s=30, color=C_GREEN, edgecolors='white', linewidth=0.5, zorder=3)
+    # 均值连线
+    ax3.plot(x, means_prefill, marker='D', linewidth=2.2, color=C_GREEN,
+            markersize=6, markeredgecolor='white', markeredgewidth=0.8, zorder=4)
+    # 标注
+    for xi, m, s in zip(x, means_prefill, stds_prefill):
+        ax3.annotate(f'{m:.0f}±{s:.0f}', (xi, m), textcoords="offset points",
+                    xytext=(0, -14), ha='center', fontsize=7, color=C_GREEN, fontweight='bold')
+
+    ax3.set_title('③ 预填充吞吐量 (Prefill)', fontsize=12, fontweight='bold', color=C_DARK, pad=10)
+    ax3.set_ylabel('Prefill (tok/s)', fontsize=9)
+    ax3.set_xticks(x)
+    ax3.set_xticklabels([f'{t}' for t in token_lengths], fontsize=8)
+    ax3.set_xlabel('输入长度 (tokens)', fontsize=9)
+    ax3.grid(True, linestyle=':', alpha=0.3)
+    ax3.set_facecolor(C_BG)
+
+    # ========== 右下: 输出稳定性（箱线图） ==========
+    ax4 = fig.add_subplot(gs[1, 1])
+
+    # 使用箱线图展示每个长度的输出吞吐分布
+    bp = ax4.boxplot(decode_data, positions=x, widths=0.4, patch_artist=True,
+                     boxprops=dict(facecolor=C_PURPLE, alpha=0.4, linewidth=1.2),
+                     whiskerprops=dict(color=C_PURPLE, linewidth=1.2),
+                     capprops=dict(color=C_PURPLE, linewidth=1.2),
+                     medianprops=dict(color=C_RED, linewidth=2),
+                     flierprops=dict(marker='o', markerfacecolor=C_PURPLE, markersize=4, alpha=0.5))
+
+    # 叠加散点
+    for i, (xi, ys) in enumerate(zip(x, decode_data)):
+        if len(ys) > 1:
+            jitter = np.random.default_rng(42).normal(0, 0.06, len(ys))
+            ax4.scatter([xi]*len(ys) + jitter, ys, alpha=0.4, s=18, color=C_PURPLE, edgecolors='none', zorder=3)
+        else:
+            ax4.scatter(xi, ys[0], alpha=0.6, s=25, color=C_PURPLE, edgecolors='white', linewidth=0.5, zorder=3)
+
+    # CV% 标注
+    for i, (xi, ys) in enumerate(zip(x, decode_data)):
+        if len(ys) > 1 and np.mean(ys) > 0:
+            cv = np.std(ys) / np.mean(ys) * 100
+            ax4.text(xi, max(ys) + max(max(d) for d in decode_data)*0.03,
+                    f'CV:{cv:.1f}%', ha='center', fontsize=7, color=C_PURPLE, fontweight='bold')
+
+    ax4.set_title('④ 输出稳定性', fontsize=12, fontweight='bold', color=C_DARK, pad=10)
+    ax4.set_ylabel('输出吞吐量 (tok/s)', fontsize=9)
+    ax4.set_xticks(x)
+    ax4.set_xticklabels([f'{t}' for t in token_lengths], fontsize=8)
+    ax4.set_xlabel('输入长度 (tokens)', fontsize=9)
+    ax4.grid(True, axis='y', linestyle=':', alpha=0.3)
+    ax4.set_facecolor(C_BG)
+
+    # ---- 底部汇总统计栏 ----
+    ax_footer = fig.add_axes([0, 0.0, 1, 0.06], facecolor='white')
+    ax_footer.axis('off')
+
+    # 计算汇总
+    all_ttft = [t for d in ttft_data for t in d]
+    all_ittl = [t for d in ittl_data for t in d]
+    all_decode = [t for d in decode_data for t in d]
+    all_prefill = [t for d in prefill_data for t in d]
+
+    if all_ttft:
+        summary = (
+            f'📊 汇总:  并发={concurrency}  |  '
+            f'TTFT P50={np.percentile(all_ttft,50):.0f}ms P90={np.percentile(all_ttft,90):.0f}ms P95={np.percentile(all_ttft,95):.0f}ms  |  '
+            f'输出吞吐 avg={np.mean(all_decode):.1f} tok/s  |  '
+            f'预填充 avg={np.mean(all_prefill):.0f} tok/s  |  '
+            f'成功率 {total_success}/{total_tests}'
+        )
+        ax_footer.text(0.5, 0.6, summary, fontsize=9, color=C_DARK,
+                      ha='center', va='center', transform=ax_footer.transAxes,
+                      bbox=dict(boxstyle='round,pad=0.4', facecolor='#ECF0F1', alpha=0.8, edgecolor=C_BLUE))
+
+    plt.savefig(save_path, dpi=150, bbox_inches='tight', facecolor='white')
+    plt.close()
+    print(f"📈 报告图表已保存: {save_path}")
 
 # -------------------- 主流程 --------------------
 def run_benchmark(
@@ -289,7 +513,8 @@ def run_benchmark(
     timeout: int,
     output_tokens: int = 512,
     save_json: str = "benchmark_results.json",
-    save_plot: str = "throughput_chart.png"
+    save_plot: str = "throughput_chart.png",
+    progress_callback=None,
 ):
     print(f"\n{'='*80}")
     print(f"🚀 LLM 性能压测")
@@ -297,13 +522,19 @@ def run_benchmark(
     print(f"📏 测试长度: {token_lengths}")
     print(f"{'='*80}\n")
 
-    all_stats = []   # 汇总每个长度平均值
-    detailed_results = []  # 保存所有原始结果
+    _stop_flag.clear()
+    bench_start = time.time()
+    all_stats = []
+    detailed_results = []
 
     for length in token_lengths:
+        if _stop_flag.is_set():
+            print("\n⏹️ 已请求停止压测")
+            break
         print(f"🔍 测试提示词长度: {length} tokens ...")
         results = run_concurrent_tests(
-            concurrency, length, base_url, model, api_key, timeout, output_tokens
+            concurrency, length, base_url, model, api_key, timeout, output_tokens,
+            progress_callback=progress_callback,
         )
         detailed_results.append({"target_tokens": length, "results": results})
 
@@ -313,16 +544,22 @@ def run_benchmark(
             all_stats.append({
                 "length": length,
                 "tftt": None, "ittl": None, "prefill": None, "output": None,
+                "tftt_p50": None, "tftt_p90": None, "tftt_p95": None,
                 "status": f"0/{concurrency} failed"
             })
             continue
 
-        avg_tftt = np.mean([r["tftt_ms"] for r in successes])
-        avg_ittl = np.mean([r["ittl_mean_ms"] for r in successes])
-        avg_prefill = np.mean([r["prefill_throughput"] for r in successes])
-        avg_output = np.mean([r["output_throughput"] for r in successes])
+        ttfts = [r["tftt_ms"] for r in successes]
+        ittls = [r["ittl_mean_ms"] for r in successes]
+        prefills = [r["prefill_throughput"] for r in successes]
+        outputs = [r["output_throughput"] for r in successes]
 
-        print(f"   ✅ 成功 {len(successes)}/{concurrency}, TFTT={avg_tftt:.2f}ms, ITTL={avg_ittl:.2f}ms, "
+        avg_tftt = np.mean(ttfts)
+        avg_ittl = np.mean(ittls)
+        avg_prefill = np.mean(prefills)
+        avg_output = np.mean(outputs)
+
+        print(f"   ✅ 成功 {len(successes)}/{concurrency}, TTFT={avg_tftt:.2f}ms, ITTL={avg_ittl:.2f}ms, "
               f"预填充={avg_prefill:.2f} tok/s, 输出={avg_output:.2f} tok/s")
 
         all_stats.append({
@@ -331,29 +568,46 @@ def run_benchmark(
             "ittl": avg_ittl,
             "prefill": avg_prefill,
             "output": avg_output,
+            "tftt_p50": np.percentile(ttfts, 50),
+            "tftt_p90": np.percentile(ttfts, 90),
+            "tftt_p95": np.percentile(ttfts, 95),
+            "output_std": np.std(outputs),
             "status": f"{len(successes)}/{concurrency} success"
         })
 
         time.sleep(0.5)
 
+    total_duration = time.time() - bench_start
+
     # ---------- 保存 JSON ----------
     with open(save_json, "w", encoding="utf-8") as f:
-        json.dump({"summary": all_stats, "details": detailed_results}, f, indent=2)
+        json.dump({
+            "summary": all_stats,
+            "details": detailed_results,
+            "config": {
+                "model": model, "base_url": base_url, "concurrency": concurrency,
+                "timeout": timeout, "output_tokens": output_tokens,
+                "token_lengths": token_lengths, "total_duration": total_duration
+            }
+        }, f, indent=2, ensure_ascii=False)
     print(f"\n💾 详细结果已保存至: {save_json}")
 
     # ---------- 输出表格 ----------
-    print("\n" + "="*80)
+    print("\n" + "="*100)
     print("📊 测试结果汇总")
-    print("="*80)
-    print(f"{'提示词长度':<12} {'TFTT(ms)':<12} {'ITTL平均(ms)':<12} {'预填充速度(tok/s)':<18} {'输出速度(tok/s)':<16} {'状态':<15}")
-    print("-"*80)
+    print("="*100)
+    print(f"{'输入长度':<10} {'输出长度':<10} {'并发':<6} {'Prefill(tok/s)':<16} {'吞吐量(tok/s)':<16} "
+          f"{'TTFT(ms)':<12} {'ITL(ms)':<12} {'状态':<15}")
+    print("-"*100)
 
     for stat in all_stats:
         if stat["tftt"] is None:
-            print(f"{stat['length']:<12} {'-':<12} {'-':<12} {'-':<18} {'-':<16} {stat['status']:<15}")
+            print(f"{stat['length']:<10} {'-':<10} {concurrency:<6} {'-':<16} {'-':<16} "
+                  f"{'-':<12} {'-':<12} {stat['status']:<15}")
         else:
-            print(f"{stat['length']:<12} {stat['tftt']:<12.2f} {stat['ittl']:<12.2f} "
-                  f"{stat['prefill']:<18.2f} {stat['output']:<16.2f} {stat['status']:<15}")
+            print(f"{stat['length']:<10} {output_tokens:<10} {concurrency:<6} "
+                  f"{stat['prefill']:<16.2f} {stat['output']:<16.2f} "
+                  f"{stat['tftt']:<12.2f} {stat['ittl']:<12.2f} {stat['status']:<15}")
 
     # ---------- 统计摘要 ----------
     prefill_vals = [s["prefill"] for s in all_stats if s["prefill"] is not None]
@@ -373,23 +627,22 @@ def run_benchmark(
         print(f"Decode吞吐:  P50={p_out[0]:.2f}  P90={p_out[1]:.2f}  P95={p_out[2]:.2f} tokens/s")
 
         # ---------- 绘制图表 ----------
-        valid_lengths = [s["length"] for s in all_stats if s["prefill"] is not None]
         plot_results(
-            token_lengths=valid_lengths,
-            prefill_vals=prefill_vals,
-            decode_vals=output_vals,
+            detailed_results=detailed_results,
             concurrency=concurrency,
             timeout=timeout,
+            model_name=model,
+            total_duration=total_duration,
             save_path=save_plot
         )
     else:
         print("\n⚠️ 没有成功的测试数据，无法绘图。")
 
-    print("\n✅ 测试完成。")
+    print(f"\n✅ 测试完成。总耗时: {total_duration:.1f}秒")
 
 # -------------------- 命令行入口 --------------------
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="LLM 吞吐量压测 + 图表生成")
+    parser = argparse.ArgumentParser(description="LLM 吞吐量压测 + 专业报告生成")
     parser.add_argument("--url", type=str, default=DEFAULT_BASE_URL, help="API Base URL")
     parser.add_argument("--model", "-m", type=str, default=DEFAULT_MODEL, help="模型名称")
     parser.add_argument("--api-key", type=str, default=DEFAULT_API_KEY, help="API Key")
@@ -402,7 +655,6 @@ if __name__ == "__main__":
     parser.add_argument("--save-plot", type=str, default=str(config.OUTPUT_DIR / "benchmarks" / "throughput_chart.png"), help="保存图表的 PNG 路径")
     args = parser.parse_args()
 
-    # 确定测试长度列表
     if args.lengths:
         lengths = [int(x.strip()) for x in args.lengths.split(",")]
     else:

@@ -73,10 +73,16 @@ def _rename_images(input_dir, model, workers, dry_run, progress=gr.Progress()):
     total = len(images)
     completed = 0
 
+    from image_tools.rename_images import _stop_flag
+    _stop_flag.clear()
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {executor.submit(process_one_image, img, model or config.RENAME_MODEL, dry_run, recent_history): img
                    for img in images}
         for i, future in enumerate(as_completed(futures)):
+            if _stop_flag.is_set():
+                executor.shutdown(wait=False, cancel_futures=True)
+                results.append("⏹️ 已请求停止")
+                break
             try:
                 old_name, new_phrase = future.result()
                 results.append(f"{old_name} → {new_phrase}")
@@ -85,7 +91,10 @@ def _rename_images(input_dir, model, workers, dry_run, progress=gr.Progress()):
             completed += 1
             progress(completed / total, desc=f"重命名中 {completed}/{total}")
 
-    result = f"处理完成：{total} 张图片\n\n" + "\n".join(results)
+    if _stop_flag.is_set():
+        result = f"已停止：已完成 {completed}/{total} 张图片\n\n" + "\n".join(results)
+    else:
+        result = f"处理完成：{total} 张图片\n\n" + "\n".join(results)
     config.save_state("rename", input_dir=input_dir, model=model or config.RENAME_MODEL, workers=workers, dry_run=dry_run)
     history.add_entry("图片重命名", input_dir, f"处理 {total} 张图片")
     return result
@@ -269,7 +278,7 @@ def _query_kb(query, keyword, model, k, batch_size, progress=gr.Progress()):
 # ============================================================
 # Tab 7: LLM 压测
 # ============================================================
-def _benchmark(url, model, api_key, concurrency, timeout, output_tokens, lengths_str):
+def _benchmark(url, model, api_key, concurrency, timeout, output_tokens, lengths_str, progress=gr.Progress()):
     from benchmarks.speedtest import run_benchmark
 
     if lengths_str.strip():
@@ -279,6 +288,11 @@ def _benchmark(url, model, api_key, concurrency, timeout, output_tokens, lengths
 
     save_json = str(config.OUTPUT_DIR / "benchmarks" / "benchmark_results.json")
     save_plot = str(config.OUTPUT_DIR / "benchmarks" / "throughput_chart.png")
+
+    total_steps = len(lengths)
+
+    def _progress_cb(done, total):
+        progress(done / total_steps, desc=f"测试中 {done}/{total} 并发")
 
     buf = io.StringIO()
     with redirect_stdout(buf):
@@ -291,7 +305,8 @@ def _benchmark(url, model, api_key, concurrency, timeout, output_tokens, lengths
             timeout=timeout,
             output_tokens=output_tokens,
             save_json=save_json,
-            save_plot=save_plot
+            save_plot=save_plot,
+            progress_callback=_progress_cb,
         )
 
     text_output = buf.getvalue()
@@ -618,11 +633,18 @@ ollama pull qwen3     # 下载模型
                                                label="并行线程数", info="越大越快，但可能触发 API 限流")
                     rn_dry = gr.Checkbox(label="试运行（只预览不实际改名）", value=s["rename"].get("dry_run", False),
                                          info="强烈建议第一次使用时先试运行，看看效果")
-                    rn_btn = gr.Button("开始重命名", variant="primary")
+                    with gr.Row():
+                        rn_btn = gr.Button("开始重命名", variant="primary")
+                        rn_stop = gr.Button("停止", variant="stop")
                 with gr.Column(scale=3):
                     rn_output = gr.Textbox(label="处理结果", lines=15, elem_classes="output-text",
                                            placeholder="处理完成后这里会显示每张图片的新名字...")
             rn_btn.click(_rename_images, [rn_input, rn_model, rn_workers, rn_dry], [rn_output])
+            def _stop_rename():
+                from image_tools.rename_images import request_stop
+                request_stop()
+                return "⏹️ 已请求停止..."
+            rn_stop.click(_stop_rename, outputs=[rn_output])
 
         # ==================== Tab 2: 图片质量评分与分类 ====================
         with gr.Tab("🔍 图片质量评分与分类"):
@@ -869,11 +891,18 @@ ollama pull qwen3     # 下载模型
                                                 info="每张图内部分两半并行处理")
                         ei_maxtok = gr.Slider(1000, 8000, value=s["ocr"].get("max_tokens", 5000), step=500, label="最大 Token 数",
                                               info="输出上限，长截图可适当调大")
-                    ei_btn = gr.Button("开始识别", variant="primary")
+                    with gr.Row():
+                        ei_btn = gr.Button("开始识别", variant="primary")
+                        ei_stop = gr.Button("停止", variant="stop")
                 with gr.Column(scale=3):
                     ei_output = gr.Textbox(label="处理日志", lines=15, elem_classes="output-text",
                                            placeholder="处理完成后这里会显示识别进度和结果...")
             ei_btn.click(_explain_images, [ei_input, ei_model, ei_temp, ei_workers, ei_iworkers, ei_maxtok], [ei_output])
+            def _stop_ocr():
+                from image_tools.ocr_chat_screenshots import request_stop
+                request_stop()
+                return "⏹️ 已请求停止..."
+            ei_stop.click(_stop_ocr, outputs=[ei_output])
 
         # ==================== Tab 4: 聊天记录压缩 ====================
         with gr.Tab("📝 聊天记录压缩"):
@@ -900,11 +929,18 @@ ollama pull qwen3     # 下载模型
                                           info="同时处理几块文本")
                         ct_maxtok = gr.Slider(1000, 8000, value=s["compress"].get("max_tokens", 4000), step=500, label="最大 Token 数",
                                               info="输出长度上限")
-                    ct_btn = gr.Button("开始压缩", variant="primary")
+                    with gr.Row():
+                        ct_btn = gr.Button("开始压缩", variant="primary")
+                        ct_stop = gr.Button("停止", variant="stop")
                 with gr.Column(scale=3):
                     ct_output = gr.Textbox(label="处理日志", lines=15, elem_classes="output-text",
                                            placeholder="处理完成后这里会显示压缩进度...")
             ct_btn.click(_compress_text, [ct_input, ct_model, ct_temp, ct_chunk, ct_iw, ct_maxtok], [ct_output])
+            def _stop_compress():
+                from text_tools.compress_chat import request_stop
+                request_stop()
+                return "⏹️ 已请求停止..."
+            ct_stop.click(_stop_compress, outputs=[ct_output])
 
         # ==================== Tab 5: 文本翻译 ====================
         with gr.Tab("🌐 文本翻译"):
@@ -931,11 +967,18 @@ ollama pull qwen3     # 下载模型
                                              info="每批同时翻译多少章。越大越快但可能超时")
                         tr_workers = gr.Slider(1, 4, value=s["translate"].get("workers", 2), step=1, label="并行线程数",
                                                info="同时运行几个翻译任务")
-                    tr_btn = gr.Button("开始翻译", variant="primary")
+                    with gr.Row():
+                        tr_btn = gr.Button("开始翻译", variant="primary")
+                        tr_stop = gr.Button("停止", variant="stop")
                 with gr.Column(scale=3):
                     tr_output = gr.Textbox(label="翻译日志", lines=15, elem_classes="output-text",
                                            placeholder="处理完成后这里会显示翻译进度、已翻章节数...")
             tr_btn.click(_translate, [tr_input, tr_output_file, tr_model, tr_batch, tr_workers], [tr_output])
+            def _stop_translate():
+                from text_tools.translate import request_stop
+                request_stop()
+                return "⏹️ 已请求停止..."
+            tr_stop.click(_stop_translate, outputs=[tr_output])
 
         # ==================== Tab 6: 知识库问答 ====================
         with gr.Tab("📚 知识库问答"):
@@ -963,45 +1006,65 @@ ollama pull qwen3     # 下载模型
                                          info="从知识库中检索多少个相关段落。越多越全面但越慢")
                         kb_batch = gr.Slider(5, 50, value=20, step=5, label="每批处理数",
                                               info="每轮迭代喂给 LLM 的段落数。越小迭代轮数越多但答案越精细")
-                    kb_btn = gr.Button("开始查询", variant="primary")
+                    with gr.Row():
+                        kb_btn = gr.Button("开始查询", variant="primary")
+                        kb_stop = gr.Button("停止", variant="stop")
                 with gr.Column(scale=3):
                     kb_output = gr.Textbox(label="回答结果", lines=18, elem_classes="output-text",
                                            placeholder="查询结果会显示在这里，包括进度和最终答案...")
             kb_btn.click(_query_kb, [kb_query, kb_keyword, kb_model, kb_k, kb_batch], [kb_output])
+            def _stop_kb():
+                from text_tools.chapter_summary import request_stop
+                request_stop()
+                return "⏹️ 已请求停止..."
+            kb_stop.click(_stop_kb, outputs=[kb_output])
 
         # ==================== Tab 7: LLM 压测 ====================
         with gr.Tab("⚡ LLM 压测"):
-            gr.Markdown(_make_title("LLM 吞吐量压测 — 测试 API 性能并生成图表"))
-            with gr.Accordion("📖 使用方法", open=False):
-                gr.Markdown("**步骤：** ① 确认 API 地址和模型名称 → ② 点「开始压测」→ ③ 查看吞吐量图表，找到模型性能瓶颈\n\n"
-                            "> 📊 **测量指标：** TTFT（首 Token 延迟）、ITTL（Token 间延迟）、Prefill 吞吐量、Decode 吞吐量\n"
+            gr.Markdown(_make_title("大模型推理性能测试 — 生成专业压测报告"))
+            with gr.Accordion("📖 测试说明", open=False):
+                gr.Markdown("**测试流程：** ① 填写 API 连接信息 → ② 设置测试参数 → ③ 点「开始测试」→ ④ 查看报告图表\n\n"
+                            "| 测试项 | 说明 |\n|---|---|\n"
+                            "| TTFT | 首 Token 延迟（Time to First Token），越小越好 |\n"
+                            "| ITTL | Token 间延迟（Inter-Token Latency），影响生成流畅度 |\n"
+                            "| Prefill | 预填充吞吐量，衡量 prompt 处理速度 |\n"
+                            "| Decode | 输出吞吐量，衡量生成速度 |\n\n"
                             "> ⏱️ 压测会占用模型全部资源，建议在空闲时运行\n"
-                            "> 📈 结果自动保存到 `outputs/benchmarks/`")
+                            "> 📈 测试报告自动保存到 `outputs/benchmarks/`")
             with gr.Row():
                 with gr.Column(scale=2):
+                    gr.Markdown("### 连接配置")
                     bm_url = gr.Textbox(label="API Base URL", value=s["benchmark"].get("url", config.OPENAI_BASE_URL),
                                         info="被测 API 地址，如 http://localhost:1234/v1")
                     bm_model = gr.Textbox(label="模型名称", value=s["benchmark"].get("model", config.BENCHMARK_MODEL),
                                           info="被测模型，需与 API 中实际名称一致")
                     bm_key = gr.Textbox(label="API Key", value=s["benchmark"].get("api_key", config.OPENAI_API_KEY), type="password",
                                         info="本地服务如 LM Studio 填任意值即可")
-                    with gr.Accordion("⚙️ 高级设置", open=False):
-                        bm_concur = gr.Slider(1, 8, value=s["benchmark"].get("concurrency", config.DEFAULT_WORKERS), step=1, label="并发数",
-                                              info="同时发几个请求。越大越能测出吞吐上限，但可能超时")
+                    gr.Markdown("### 测试参数")
+                    bm_outtok = gr.Slider(64, 2048, value=s["benchmark"].get("output_tokens", 512), step=64, label="生成 Token 数",
+                                          info="每次请求让模型生成多少 token")
+                    bm_concur = gr.Slider(1, 8, value=s["benchmark"].get("concurrency", config.DEFAULT_WORKERS), step=1, label="并发数",
+                                          info="同时发几个请求。越大越能测出吞吐上限")
+                    bm_lengths = gr.Textbox(label="测试 Prompt 长度（逗号分隔）",
+                                            value=s["benchmark"].get("lengths_str", "512,1024,2048,4096"),
+                                            info="不同输入长度分别测试")
+                    with gr.Accordion("⚙️ 更多设置", open=False):
                         bm_timeout = gr.Slider(10, 120, value=s["benchmark"].get("timeout", config.REQUEST_TIMEOUT_SHORT), step=5, label="超时（秒）",
                                                info="单个请求超时时间")
-                        bm_outtok = gr.Slider(64, 2048, value=s["benchmark"].get("output_tokens", 512), step=64, label="每次生成 Token 数",
-                                              info="每次请求让模型生成多少 token")
-                        bm_lengths = gr.Textbox(label="测试长度列表（逗号分隔）",
-                                                value=s["benchmark"].get("lengths_str", "512,1024,2048,4096"),
-                                                info="不同输入长度分别测试，逗号分隔")
-                    bm_btn = gr.Button("开始压测", variant="primary")
+                    with gr.Row():
+                        bm_btn = gr.Button("开始测试", variant="primary")
+                        bm_stop = gr.Button("停止", variant="stop")
                 with gr.Column(scale=3):
-                    bm_text = gr.Textbox(label="压测日志", lines=10, elem_classes="output-text",
-                                         placeholder="压测完成后这里会显示各长度的 TTFT、ITTL、吞吐量数据...")
-                    bm_plot = gr.Image(label="吞吐量图表")
+                    bm_text = gr.Textbox(label="测试进度", lines=12, elem_classes="output-text",
+                                         placeholder="点击「开始测试」后，实时显示测试进度和结果...")
+                    bm_plot = gr.Image(label="测试报告图表")
             bm_btn.click(_benchmark, [bm_url, bm_model, bm_key, bm_concur, bm_timeout, bm_outtok, bm_lengths],
                         [bm_text, bm_plot])
+            def _stop_benchmark():
+                from benchmarks.speedtest import request_stop
+                request_stop()
+                return "⏹️ 已请求停止..."
+            bm_stop.click(_stop_benchmark, outputs=[bm_text])
 
         # ==================== Tab 8: 设置 ====================
         with gr.Tab("⚙️ 设置"):

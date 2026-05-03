@@ -281,7 +281,11 @@ def translate_book_parallel(
     progress_lock = threading.Lock()
 
     # 5. 分批处理章节
+    _stop_flag.clear()
     for batch_start in range(start_idx, total_chapters, batch_size):
+        if _stop_flag.is_set():
+            print("\n⏹️ 已请求停止翻译")
+            break
         batch_end = min(batch_start + batch_size, total_chapters)
         print(f"\n{'─'*50}")
         print(f"📦 正在处理批次: 第 {batch_start+1} ~ {batch_end} 章 (总进度 {batch_start}/{total_chapters})")
@@ -318,6 +322,10 @@ def translate_book_parallel(
 
             # 收集结果（保持顺序）
             for future in as_completed(future_to_idx):
+                if _stop_flag.is_set():
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    print("   ⏹️ 已请求停止翻译")
+                    break
                 idx = future_to_idx[future]
                 try:
                     result = future.result()
@@ -343,7 +351,10 @@ def translate_book_parallel(
         print(f"💾 进度已保存: {batch_end}/{total_chapters} 章，本批次耗时 {batch_elapsed:.1f} 秒")
         existing_translations = all_translations
 
-    print(f"\n🎉 全部翻译完成！输出文件: {os.path.abspath(output_file)}")
+    if _stop_flag.is_set():
+        print(f"\n⏹️ 翻译已停止。已完成的译文已保存至: {os.path.abspath(output_file)}")
+    else:
+        print(f"\n🎉 全部翻译完成！输出文件: {os.path.abspath(output_file)}")
 
 # -------------------- 命令行入口 --------------------
 if __name__ == "__main__":
