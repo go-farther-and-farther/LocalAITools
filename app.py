@@ -500,25 +500,33 @@ def build_ui():
 
             gr.Markdown("""本工具需要连接一个 AI 模型服务才能工作。推荐以下方式（任选一种）：
 
-**🟢 方式一：LM Studio（推荐新手）**
+**⭐ 方式一：云端 API（最简单，免下载模型，按量付费）**
+1. [硅基流动 SiliconFlow](https://cloud.siliconflow.cn/) — 注册送额度，支持 Qwen 系列
+2. [DeepSeek 开放平台](https://platform.deepseek.com/) — 便宜好用
+3. [阿里云百炼](https://bailian.console.aliyun.com/) — Qwen 官方 API
+4. 注册后在后台创建 API Key，填到下方设置页的 API 地址和密钥即可
+
+**⭐⭐ 方式二：LM Studio（推荐本地运行，免费）**
 1. 下载安装 [LM Studio](https://lmstudio.ai/)（支持 Windows / Mac）
 2. 打开 LM Studio，在搜索框搜 `qwen3` 或 `qwen3.6`
 3. 下载一个视觉模型（如 `qwen3.6-27b`，约 16 GB）
 4. 切换到 **Local Server** 标签页，点击 **Start Server**
 5. 默认地址就是 `http://localhost:1234/v1`，无需修改
 
-**🟡 方式二：云端 API（免下载模型，需付费）**
-1. [硅基流动 SiliconFlow](https://cloud.siliconflow.cn/) — 注册送额度，支持 Qwen 系列
-2. [DeepSeek 开放平台](https://platform.deepseek.com/) — 便宜好用
-3. [阿里云百炼](https://bailian.console.aliyun.com/) — Qwen 官方 API
-4. 注册后在后台创建 API Key，填入下方的 API 地址和密钥
-
-**🟢 方式三：Ollama（进阶用户）**
+**⭐⭐⭐ 方式三：Ollama（免费，需命令行基础）**
 ```bash
 ollama serve          # 启动服务
 ollama pull qwen3     # 下载模型
 ```
 默认地址 `http://localhost:11434/v1`
+
+**⭐⭐⭐ 方式四：vLLM / SGLang / Xinference（自建推理服务，适合多人共享）**
+- [vLLM](https://github.com/vllm-project/vllm) — 生产级推理引擎，支持 PagedAttention，吞吐量高
+- [SGLang](https://github.com/sgl-project/sglang) — 高效推理框架，结构化生成能力强
+- [Xinference](https://github.com/xorbitsai/inference) — 一键部署，支持 Web UI 管理模型
+- 部署后 OpenAI 兼容端点填到设置页即可使用
+
+> 💡 **简单总结：** 不想折腾 → 云端 API；有显卡想省钱 → LM Studio；技术党想折腾 → Ollama/vLLM
 """)
 
             gr.Markdown("---")
@@ -526,11 +534,11 @@ ollama pull qwen3     # 下载模型
             gr.Markdown("### ⚙️ 第二步：填写配置")
             gr.Markdown("""切换到 **⚙️ 设置** 标签页，填写你的 API 信息：
 
-- **API 地址**：LM Studio 默认 `http://localhost:1234/v1`，云端 API 填对应地址
+- **API 地址**：本地服务默认 `http://localhost:1234/v1`（LM Studio），云端 API 填对应地址
 - **API 密钥**：本地服务填任意值（如 `lm-studio`），云端 API 填真实的 Key
 - 填好后点 **💾 保存设置**，然后点 **🔗 测试连接** 确认能连上
 
-> 💡 如果使用 LM Studio，默认配置**无需修改**，直接测试连接即可！""")
+> 💡 云端 API 需填写平台提供的地址和 Key；本地服务一般无需修改地址。""")
 
             gr.Markdown("---")
 
