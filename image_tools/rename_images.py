@@ -81,7 +81,7 @@ def add_recent_description(recent_queue: deque, description: str):
         recent_queue.append(description)
 
 
-def encode_image(image_path: str) -> Optional[str]:
+def encode_image(image_path: str, max_size: int = 2048) -> Optional[str]:
     from PIL import Image, ImageOps
     try:
         img = Image.open(image_path)
@@ -89,6 +89,10 @@ def encode_image(image_path: str) -> Optional[str]:
             img = ImageOps.exif_transpose(img)
         except Exception:
             pass
+        w, h = img.size
+        if max(w, h) > max_size:
+            scale = max_size / max(w, h)
+            img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
         buf = io_module.BytesIO()
         fmt = img.format or 'JPEG'
         if fmt.upper() == 'WEBP' and img.mode in ('RGBA', 'P'):

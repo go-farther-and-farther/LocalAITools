@@ -91,18 +91,31 @@ def _rename_images(input_dir, model, workers, dry_run, progress=gr.Progress()):
 
 
 # ============================================================
-# Tab 2: 图片质量评分与分类（合并原 Tab 2 + Tab 3）
+# Tab 2: 图片质量评分
 # ============================================================
-def _detect_and_classify(input_dir, mode, top_percent, bottom_percent, custom_prompt, progress=gr.Progress()):
-    from image_tools.detect_ai_errors import process_and_classify
+def _score_images(input_dir, mode, custom_prompt, model, progress=gr.Progress()):
+    from image_tools.detect_ai_errors import score_images
 
     def on_progress(completed, total):
         progress(completed / total, desc=f"评分中 {completed}/{total}")
 
-    result = _capture_log(process_and_classify, input_dir, mode, on_progress,
-                           top_percent / 100, bottom_percent / 100, custom_prompt)
-    mode_label = "漫展摄影" if mode == "photo" else "AI图片检测"
-    history.add_entry(f"质量评分({mode_label})", input_dir, "评分分类完成")
+    result = _capture_log(score_images, input_dir, mode, on_progress, custom_prompt, model or None)
+    mode_labels = {"ai":"AI检测","photo":"漫展摄影","general":"通用照片","portrait":"人像","landscape":"风景","document":"文档扫描","art":"绘画插图"}
+    mode_label = mode_labels.get(mode, mode)
+    history.add_entry(f"质量评分({mode_label})", input_dir, "评分完成")
+    return result
+
+
+def _classify_images(input_dir, classify_method, top_percent, bottom_percent,
+                     min_score, max_score, progress=gr.Progress()):
+    from image_tools.detect_ai_errors import classify_images
+
+    use_threshold = (classify_method == "threshold")
+    result = _capture_log(classify_images, input_dir, None,
+                           top_percent / 100 if top_percent else None,
+                           bottom_percent / 100 if bottom_percent else None,
+                           min_score, max_score, use_threshold)
+    history.add_entry("质量分类", input_dir, "分类完成")
     return result
 
 
@@ -590,46 +603,104 @@ ollama pull qwen3     # 下载模型
         with gr.Tab("🔍 图片质量评分与分类"):
             gr.Markdown(_make_title("AI 评分 + 自动分拣 — 多维度评估，高分/低分图片自动归类"))
             with gr.Accordion("📖 使用方法", open=False):
-                gr.Markdown("**步骤：** ① 选择检测模式 → ② 把图片放进文件夹 → ③ 点「开始评分分类」→ 优质图片自动移至 `HighQuality/`，劣质/错误图片移至 `LowQuality_Errors/`\n\n"
-                            "**两种模式：**\n"
+                gr.Markdown("**评分：** ① 选择检测模式 → ② 填文件夹路径 → ③ 点「开始评分」→ 每张图生成 `.txt` 评分文件\n\n"
+                            "**分类：** ④ 评分完成后点「开始分类」→ 优质图片移至 `HighQuality/`，劣质/错误图片移至 `LowQuality_Errors/`\n\n"
+                            "**七种检测模式：**\n"
                             "- 🎨 **AI 图片错误检测** — 检测 AI 生成图的肢体错乱、面部畸形、结构崩坏等问题\n"
-                            "- 📸 **漫展摄影筛选** — 检测跑焦模糊、过曝欠曝等拍摄问题，筛选可出片的 Cosplay 照片\n\n"
-                            "> 💡 每张图会生成同名 `.txt` 评分文件，方便核对\n"
-                            "> 🎛️ 下方的分拣比例和评分标准均可自由调整")
+                            "- 📸 **漫展摄影筛选** — 检测跑焦模糊、过曝欠曝等拍摄问题，筛选可出片的 Cosplay 照片\n"
+                            "- 🖼️ **通用照片质量** — 综合评估清晰度、曝光、构图、内容趣味性\n"
+                            "- 👤 **人像摄影评估** — 侧重面部清晰度、肤色、表情、虚化氛围\n"
+                            "- 🌄 **风景摄影评估** — 侧重光影层次、构图法则、色彩氛围\n"
+                            "- 📄 **文档扫描清晰度** — 评估文字可读性、光照均匀度、畸变、完整度\n"
+                            "- 🖌️ **绘画插图质量** — 评估造型比例、线条笔触、色彩光影、完成度\n\n"
+                            "> 💡 评分和分类是独立的两步，评完分可以先看分数再决定如何分类")
+
+            # ---- 评分区域 ----
+            gr.Markdown("### ① 评分")
             with gr.Row():
                 with gr.Column(scale=2):
                     de_mode = gr.Dropdown(
                         label="检测模式",
-                        choices=[("🎨 AI 图片错误检测", "ai"), ("📸 漫展摄影筛选", "photo")],
+                        choices=[
+                            ("🎨 AI 图片错误检测", "ai"),
+                            ("📸 漫展摄影筛选", "photo"),
+                            ("🖼️ 通用照片质量", "general"),
+                            ("👤 人像摄影评估", "portrait"),
+                            ("🌄 风景摄影评估", "landscape"),
+                            ("📄 文档扫描清晰度", "document"),
+                            ("🖌️ 绘画插图质量", "art"),
+                        ],
                         value="ai",
-                        info="AI 错误检测：找肢体畸形/结构崩坏 | 漫展摄影：找跑焦/过曝/欠曝"
+                        info="AI错误：找肢体畸形/崩坏 | 摄影：找跑焦/过曝 | 通用：综合评估 | 人像/风景/文档/绘画各有侧重"
                     )
                     de_input = gr.Textbox(label="图片文件夹",
                                           value=str(config.DATA_DIR / "images"),
                                           placeholder="粘贴图片所在文件夹的完整路径",
-                                          info="处理完成后会在该文件夹下生成 HighQuality/ 和 LowQuality_Errors/ 子文件夹")
+                                          info="评分结果保存为同名 .txt 文件")
+                    de_model = gr.Textbox(label="视觉模型", value=config.VISION_MODEL,
+                                          info="需要视觉模型。留空使用设置页默认值")
+                    de_prompt = gr.Textbox(
+                        label="自定义评分提示词（留空使用默认）",
+                        value="",
+                        lines=6,
+                        placeholder="留空则使用当前模式的默认提示词。\n切换检测模式后请清空此框或重新填写对应模式的提示词。",
+                        info="留空 = 使用默认提示词"
+                    )
+                    with gr.Row():
+                        de_score_btn = gr.Button("开始评分", variant="primary")
+                        de_score_stop = gr.Button("停止", variant="stop")
+                with gr.Column(scale=3):
+                    de_score_output = gr.Textbox(label="评分日志", lines=15, elem_classes="output-text",
+                                                 placeholder="评分完成后这里会显示每张图的分数和理由...")
 
-                    with gr.Accordion("🎛️ 分拣规则 & 提示词", open=False):
-                        with gr.Row():
+            # ---- 分类区域 ----
+            gr.Markdown("### ② 分类（根据已有评分结果）")
+            with gr.Row():
+                with gr.Column(scale=2):
+                    de_cls_method = gr.Radio(
+                        label="分类方式",
+                        choices=[("按比例（前/后 N%）", "percent"), ("按分值（≥N 分 或 <M 分）", "threshold")],
+                        value="percent",
+                        info="按比例：分数前N%入高分、后N%入低分 | 按分值：设定分数线"
+                    )
+                    with gr.Column():
+                        with gr.Row(visible=True) as de_percent_row:
                             de_top = gr.Slider(1, 50, value=int(config.TOP_PERCENT * 100), step=1,
-                                               label=f"高分比例（%）",
-                                               info="评分前 N% 的图片移入 HighQuality 目录")
+                                               label="高分比例（%）",
+                                               info="评分前 N% 的图片移入 HighQuality")
                             de_bottom = gr.Slider(1, 50, value=int(config.BOTTOM_PERCENT * 100), step=1,
                                                   label="低分比例（%）",
-                                                  info="评分后 N% 的图片 + 所有 ERR 图片移入 LowQuality_Errors")
-                        de_prompt = gr.Textbox(
-                            label="自定义评分提示词（留空使用默认）",
-                            value="",
-                            lines=8,
-                            placeholder="在此输入自定义评分标准...\n\n留空则使用当前模式的默认提示词。\n修改提示词可以：调整评分宽松度、改变关注重点、自定义输出格式等。\n\n提示：切换检测模式后请清空此框或重新填写对应模式的提示词。",
-                            info="留空 = 使用默认提示词。填写后覆盖默认，适合有经验的用户微调评分标准。"
-                        )
-
-                    de_btn = gr.Button("开始评分分类", variant="primary")
+                                                  info="评分后 N% + 所有 ERR 图片移入 LowQuality_Errors")
+                        with gr.Row(visible=False) as de_threshold_row:
+                            de_min = gr.Slider(0.0, 10.0, value=7.0, step=0.1,
+                                               label="高分线（≥）",
+                                               info="分数 ≥ 此值的图片移入 HighQuality")
+                            de_max = gr.Slider(0.0, 10.0, value=4.0, step=0.1,
+                                               label="低分线（<）",
+                                               info="分数 < 此值的图片 + ERR 移入 LowQuality_Errors")
+                    with gr.Row():
+                        de_cls_btn = gr.Button("开始分类", variant="primary")
                 with gr.Column(scale=3):
-                    de_output = gr.Textbox(label="处理日志", lines=15, elem_classes="output-text",
-                                           placeholder="处理完成后这里会显示每张图的评分和分类结果...")
-            de_btn.click(_detect_and_classify, [de_input, de_mode, de_top, de_bottom, de_prompt], [de_output])
+                    de_cls_output = gr.Textbox(label="分类日志", lines=12, elem_classes="output-text",
+                                               placeholder="分类完成后这里会显示移动结果...")
+
+            # 显示/隐藏分类方式
+            def _toggle_cls_method(method):
+                if method == "percent":
+                    return gr.update(visible=True), gr.update(visible=False)
+                else:
+                    return gr.update(visible=False), gr.update(visible=True)
+
+            de_cls_method.change(_toggle_cls_method, [de_cls_method], [de_percent_row, de_threshold_row])
+
+            def _stop_scoring():
+                from image_tools.detect_ai_errors import request_stop
+                request_stop()
+                return "⏹️ 已请求停止..."
+
+            de_score_event = de_score_btn.click(_score_images, [de_input, de_mode, de_prompt, de_model], [de_score_output])
+            de_score_stop.click(_stop_scoring, outputs=[de_score_output])
+            de_cls_btn.click(_classify_images, [de_input, de_cls_method, de_top, de_bottom, de_min, de_max], [de_cls_output])
 
         # ==================== Tab 3: 聊天截图识别 ====================
         with gr.Tab("💬 聊天截图识别"):

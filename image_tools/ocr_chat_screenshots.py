@@ -58,9 +58,13 @@ EXTRACT_PROMPT = """你是一个聊天记录整理助手。我将按从上到下
 请输出识别结果："""
 
 
-def encode_image_to_base64(pil_image: Image.Image) -> str:
-    """将 PIL 图片转为 base64 JPEG，处理 RGBA 模式"""
+def encode_image_to_base64(pil_image: Image.Image, max_size: int = 2048) -> str:
+    """将 PIL 图片转为 base64 JPEG，处理 RGBA 模式，自动压缩大图"""
     import io
+    w, h = pil_image.size
+    if max(w, h) > max_size:
+        scale = max_size / max(w, h)
+        pil_image = pil_image.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
     buffered = io.BytesIO()
     if pil_image.mode in ("RGBA", "P"):
         pil_image = pil_image.convert("RGB")
