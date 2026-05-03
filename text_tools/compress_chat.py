@@ -7,13 +7,23 @@
 
 import re
 import sys
-import config
+import time
+import threading
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+import config
 from typing import List, Tuple, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
 from tqdm import tqdm
+
+_stop_flag = threading.Event()
+
+def request_stop():
+    """请求停止当前正在执行的压缩任务"""
+    _stop_flag.set()
 
 
 COMPRESS_PROMPT = """你是一个聊天记录压缩助手，请将以下原始聊天记录压缩成简洁版本。
@@ -136,7 +146,6 @@ def compress_chunk(chunk_text, chunk_idx, model, temperature, max_tokens):
         except Exception as e:
             if attempt < config.RETRY_TIMES:
                 print(f"   ⚠️ 第{chunk_idx+1}块压缩失败 (尝试 {attempt+1}/{config.RETRY_TIMES+1}): {e}，等待重试...")
-                import time
                 time.sleep(2)
             else:
                 print(f"   ❌ 第{chunk_idx+1}块压缩彻底失败，将保留原始文本以免丢失信息。错误: {e}")
@@ -181,9 +190,13 @@ def process_single_text_file(txt_path, output_txt_path=None, model=config.VISION
         if progress_callback:
             progress_callback(chunk_done, total)
 
+    _stop_flag.clear()
     # 根据块数量决定是否并发
     if total == 1 or internal_workers <= 1:
         for i, chunk in enumerate(chunks):
+            if _stop_flag.is_set():
+                print("      ⏹️ 已请求停止压缩")
+                break
             print(f"      🚀 压缩第{i+1}/{total}块...")
             results[i] = compress_chunk(chunk, i, model, temperature, max_tokens)
             chunk_finished()
@@ -193,6 +206,10 @@ def process_single_text_file(txt_path, output_txt_path=None, model=config.VISION
             fut_map = {executor.submit(compress_chunk, chunks[i], i, model, temperature, max_tokens): i
                        for i in range(total)}
             for fut in as_completed(fut_map):
+                if _stop_flag.is_set():
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    print("      ⏹️ 已请求停止压缩")
+                    break
                 idx = fut_map[fut]
                 try:
                     results[idx] = fut.result()

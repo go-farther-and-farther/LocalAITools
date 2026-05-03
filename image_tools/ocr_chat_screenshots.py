@@ -5,7 +5,6 @@
 支持单图内部并发、多图并发，内置重试与图片模式转换。
 """
 
-import os
 import sys
 import base64
 import re
@@ -17,10 +16,18 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 sys.path.insert(0, str(Path(__file__).parent.parent))
 import config
 
+import threading
+
 from PIL import Image
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
 from tqdm import tqdm
+
+_stop_flag = threading.Event()
+
+def request_stop():
+    """请求停止当前正在执行的 OCR 任务"""
+    _stop_flag.set()
 
 EXTRACT_PROMPT = """你是一个聊天记录整理助手。我将按从上到下的顺序给你多张聊天记录长截图切片，它们是同一段对话的连续画面。
 
@@ -210,6 +217,7 @@ def process_folder(input_dir: Path,
     tasks = [(img, output_dir / f"{img.stem}.txt") for img in images]
     completed = 0
 
+    _stop_flag.clear()
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_img = {
             executor.submit(
@@ -219,6 +227,10 @@ def process_folder(input_dir: Path,
             for img, out in tasks
         }
         for future in tqdm(as_completed(future_to_img), total=total, desc="总体进度"):
+            if _stop_flag.is_set():
+                executor.shutdown(wait=False, cancel_futures=True)
+                print("\n⏹️ 已请求停止 OCR")
+                break
             img = future_to_img[future]
             try:
                 future.result()
@@ -228,7 +240,8 @@ def process_folder(input_dir: Path,
             if progress_callback:
                 progress_callback(completed, total)
 
-    print("\n🎉 所有图片处理完成！")
+    if not _stop_flag.is_set():
+        print("\n🎉 所有图片处理完成！")
 
 
 # ================= 主程序 =================

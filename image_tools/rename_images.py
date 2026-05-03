@@ -8,7 +8,6 @@
 - 支持并行处理、试运行、仅处理截图
 """
 
-import os
 import io as io_module
 import re
 import sys
@@ -29,6 +28,12 @@ from langchain_core.messages import HumanMessage
 from tqdm import tqdm
 
 DEFAULT_MODEL = config.RENAME_MODEL
+
+_stop_flag = threading.Event()
+
+def request_stop():
+    """请求停止当前正在执行的重命名任务"""
+    _stop_flag.set()
 
 # ========== 统一的提示词模板 ==========
 PROMPT = """请用3-25个汉字简洁描述这张图片的内容。
@@ -304,20 +309,26 @@ def main():
     # 最近3次生成历史（线程安全队列）
     recent_history = deque(maxlen=5)
 
+    _stop_flag.clear()
     with tqdm(total=len(images), desc="处理进度", unit="张") as pbar:
         with ThreadPoolExecutor(max_workers=args.workers) as executor:
             futures = {executor.submit(process_one_image, img, args.model, args.dry_run, recent_history): img
                        for img in images}
             for future in as_completed(futures):
+                if _stop_flag.is_set():
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    print("\n⏹️ 已请求停止重命名")
+                    break
                 try:
                     future.result()
                 except Exception as e:
                     print(f"❌ 线程内部异常: {e}")
                 pbar.update(1)
 
-    print("\n🎉 全部处理完成！")
-    if args.dry_run:
-        print("（试运行模式）")
+    if not _stop_flag.is_set():
+        print("\n🎉 全部处理完成！")
+        if args.dry_run:
+            print("（试运行模式）")
 
 
 if __name__ == "__main__":
