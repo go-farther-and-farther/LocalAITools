@@ -99,3 +99,45 @@ OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", str(ROOT_DIR / "outputs")))
 # 自动创建必要目录
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+# ==================== 状态持久化（记住上次输入的所有参数） ====================
+import json as _json
+
+_STATE_FILE = ROOT_DIR / "state.json"
+
+def load_state(tool_key: str = None) -> dict:
+    """加载持久化状态。指定 tool_key 返回该工具参数字典，不指定返回全部。"""
+    if _STATE_FILE.exists():
+        try:
+            data = _json.loads(_STATE_FILE.read_text(encoding="utf-8"))
+            if tool_key:
+                return data.get(tool_key, {})
+            return data
+        except Exception:
+            pass
+    return {} if tool_key else {}
+
+def save_state(tool_key: str, params: dict = None, **kwargs):
+    """保存某个工具的所有参数。支持 save_state('rename', input_dir='...', model='...', workers=4)"""
+    state = {}
+    if _STATE_FILE.exists():
+        try:
+            state = _json.loads(_STATE_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    if params:
+        state[tool_key] = params
+    else:
+        state[tool_key] = {k: v for k, v in kwargs.items() if v is not None and v != ""}
+    try:
+        _STATE_FILE.write_text(_json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+def clear_state():
+    """清除所有保存的状态，恢复默认设置"""
+    try:
+        if _STATE_FILE.exists():
+            _STATE_FILE.unlink()
+    except Exception:
+        pass
