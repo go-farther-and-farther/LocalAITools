@@ -108,6 +108,51 @@ def delete_all_documents(docs_dir: Path = None) -> str:
 
 # ==================== 索引构建 ====================
 
+HF_MIRROR = "https://hf-mirror.com"
+
+
+def _get_device():
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return "cuda"
+    except ImportError:
+        pass
+    try:
+        import torch_directml
+        if torch_directml.is_available():
+            return torch_directml.device(0)
+    except (ImportError, Exception):
+        pass
+    return "cpu"
+
+
+def _load_embeddings_safe(model_path: str, log_fn=None):
+    """加载 Embedding 模型，失败时自动切换 HuggingFace 镜像重试。返回 embeddings 或错误字符串。"""
+    from langchain_huggingface import HuggingFaceEmbeddings
+    device = _get_device()
+    if log_fn:
+        log_fn(f"📐 Embedding 设备: {device}")
+    kwargs = dict(
+        model_name=model_path,
+        model_kwargs={'device': device},
+        encode_kwargs={'normalize_embeddings': True},
+    )
+    try:
+        return HuggingFaceEmbeddings(**kwargs)
+    except Exception as e:
+        err = str(e).lower()
+        if "ssl" in err or "certificate" in err or "connect" in err or "timeout" in err:
+            if log_fn:
+                log_fn(f"⚠️ HuggingFace 连接失败，自动切换镜像: {HF_MIRROR}")
+            os.environ["HF_ENDPOINT"] = HF_MIRROR
+            try:
+                return HuggingFaceEmbeddings(**kwargs)
+            except Exception as e2:
+                return f"❌ 镜像也失败了: {e2}\n请手动下载模型后在设置中填写本地路径"
+        return f"❌ 加载 Embedding 模型失败: {e}"
+
+
 def build_index(
     docs_dir: Path = None,
     index_dir: Path = None,
@@ -169,22 +214,9 @@ def build_index(
 
     # 构建 Embedding
     model_path = embedding_model or config.EMBEDDING_MODEL_PATH or "BAAI/bge-small-zh-v1.5"
-    from langchain_huggingface import HuggingFaceEmbeddings
-    try:
-        embeddings = HuggingFaceEmbeddings(
-            model_name=model_path,
-            model_kwargs={'device': 'cpu', 'cache_dir': str(config.DATA_DIR / "models")},
-            encode_kwargs={'normalize_embeddings': True},
-        )
-    except Exception as e:
-        err = str(e)
-        if "SSL" in err or "certificate" in err.lower():
-            return ("❌ SSL 证书错误，无法访问 HuggingFace。\n\n"
-                    "解决方案（任选其一）：\n"
-                    "1. 设置环境变量使用镜像：HF_ENDPOINT=https://hf-mirror.com\n"
-                    "2. 本地下载模型后在 .env 中配置 EMBEDDING_MODEL_PATH=/path/to/local/model\n"
-                    "3. 在设置页的「目录与索引」中填写 Embedding 模型本地路径")
-        return f"❌ 加载 Embedding 模型失败: {e}"
+    embeddings = _load_embeddings_safe(model_path, _log)
+    if isinstance(embeddings, str):
+        return embeddings  # 错误消息
 
     _log("Embedding 模型已加载，正在向量化...")
 
@@ -252,13 +284,10 @@ def get_index_stats(index_dir: Path = None) -> Dict:
         stats["index_size"] = index_file.stat().st_size
         # 尝试读取文档数
         try:
-            from langchain_huggingface import HuggingFaceEmbeddings
             model_path = config.EMBEDDING_MODEL_PATH or "BAAI/bge-small-zh-v1.5"
-            embeddings = HuggingFaceEmbeddings(
-                model_name=model_path,
-                model_kwargs={'device': 'cpu', 'cache_dir': str(config.DATA_DIR / "models")},
-                encode_kwargs={'normalize_embeddings': True},
-            )
+            embeddings = _load_embeddings_safe(model_path)
+            if isinstance(embeddings, str):
+                raise RuntimeError(embeddings)
             from langchain_community.vectorstores import FAISS
             vs = FAISS.load_local(str(index_dir), embeddings, allow_dangerous_deserialization=True)
             stats["doc_count"] = len(vs.docstore._dict)

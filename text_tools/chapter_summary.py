@@ -36,11 +36,7 @@ def _init_kb():
         return
 
     model_path = config.EMBEDDING_MODEL_PATH or "BAAI/bge-small-zh-v1.5"
-    _embeddings = HuggingFaceEmbeddings(
-        model_name=model_path,
-        model_kwargs={'device': 'cpu', 'cache_dir': str(config.DATA_DIR / "models")},
-        encode_kwargs={'normalize_embeddings': True},
-    )
+    _embeddings = _load_embeddings(model_path)
     _vector = FAISS.load_local(
         config.FAISS_INDEX_PATH, _embeddings, allow_dangerous_deserialization=True
     )
@@ -48,6 +44,45 @@ def _init_kb():
     _all_texts = [doc.page_content for doc in _all_docs]
     tokenized_corpus = [list(jieba.cut(text)) for text in _all_texts]
     _bm25 = BM25Okapi(tokenized_corpus)
+
+
+HF_MIRROR = "https://hf-mirror.com"
+
+
+def _get_device() -> str:
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return "cuda"
+    except ImportError:
+        pass
+    try:
+        import torch_directml
+        if torch_directml.is_available():
+            return torch_directml.device(0)
+    except (ImportError, Exception):
+        pass
+    return "cpu"
+
+
+def _load_embeddings(model_path: str) -> HuggingFaceEmbeddings:
+    """加载 Embedding 模型，失败时自动切换 HuggingFace 镜像重试"""
+    device = _get_device()
+    print(f"📐 Embedding 设备: {device}")
+    kwargs = dict(
+        model_name=model_path,
+        model_kwargs={'device': device},
+        encode_kwargs={'normalize_embeddings': True},
+    )
+    try:
+        return HuggingFaceEmbeddings(**kwargs)
+    except Exception as e:
+        err = str(e).lower()
+        if "ssl" in err or "certificate" in err or "connect" in err or "timeout" in err:
+            print(f"⚠️ HuggingFace 连接失败，自动切换镜像: {HF_MIRROR}")
+            os.environ["HF_ENDPOINT"] = HF_MIRROR
+            return HuggingFaceEmbeddings(**kwargs)
+        raise
 
 
 def _normalize_scores(scores: List[float]) -> List[float]:
