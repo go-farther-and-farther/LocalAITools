@@ -141,3 +141,59 @@ def clear_state():
             _STATE_FILE.unlink()
     except Exception:
         pass
+
+
+# ==================== 供应商管理 ====================
+def load_providers():
+    """加载供应商列表和当前活动供应商名。首次使用时从 .env 创建默认供应商。"""
+    state = {}
+    if _STATE_FILE.exists():
+        try:
+            state = _json.loads(_STATE_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    providers = state.get("providers")
+    if not providers or not providers.get("list"):
+        # 首次：从当前 .env 配置创建默认供应商
+        default = {
+            "list": [
+                {"name": "默认", "base_url": OPENAI_BASE_URL, "api_key": OPENAI_API_KEY}
+            ],
+            "active": "默认"
+        }
+        state["providers"] = default
+        try:
+            _STATE_FILE.write_text(_json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+        return default["list"], default["active"]
+
+    return providers["list"], providers.get("active", providers["list"][0]["name"])
+
+
+def save_providers(provider_list, active_name):
+    """保存供应商列表和当前活动供应商名"""
+    state = {}
+    if _STATE_FILE.exists():
+        try:
+            state = _json.loads(_STATE_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    state["providers"] = {"list": provider_list, "active": active_name}
+    try:
+        _STATE_FILE.write_text(_json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def get_active_provider():
+    """获取当前活动供应商的 {name, base_url, api_key}"""
+    provider_list, active_name = load_providers()
+    for p in provider_list:
+        if p["name"] == active_name:
+            return p
+    # fallback: 返回第一个
+    if provider_list:
+        return provider_list[0]
+    return {"name": "默认", "base_url": OPENAI_BASE_URL, "api_key": OPENAI_API_KEY}

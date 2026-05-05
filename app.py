@@ -506,6 +506,150 @@ def _test_api_connection(base_url, api_key, model):
             return f"❌ 无法连接到 {base_url}\n请确认：\n1. LM Studio 或其他 API 服务是否已启动\n2. 地址和端口是否正确"
         return f"❌ 连接失败: {msg}"
 
+
+def _fetch_models(base_url, api_key):
+    """从 API 获取可用模型列表，按类型分类"""
+    if not base_url or not base_url.strip():
+        return {}, "❌ 请填写 API 地址"
+    try:
+        from openai import OpenAI
+        client = OpenAI(base_url=base_url.strip(), api_key=(api_key or "").strip() or "no-key")
+        models = client.models.list()
+        model_ids = sorted([m.id for m in models])
+    except Exception as e:
+        return {}, f"❌ 获取失败: {e}"
+
+    if not model_ids:
+        return {}, "⚠️ 未找到任何模型"
+
+    # 分类
+    vlm_kw = ['vision', 'vlm', 'visual', 'gpt-4o', 'qwen-vl', 'qwen2-vl', 'internvl', 'minicpm-v', 'cogvlm', 'llava', 'deepseek-vl']
+    embed_kw = ['embed', 'bge', 'e5-', 'gte-', 'text-embedding', 'cohere']
+    chat_kw = ['chat', 'gpt', 'qwen', 'deepseek', 'llama', 'mistral', 'gemma', 'glm', 'yi-', 'yi ', 'internlm', 'phi', 'baichuan', 'moonshot', 'kimi', 'doubao', 'spark', 'ernie', 'claude', 'gemini']
+
+    def _classify(mid):
+        low = mid.lower()
+        if any(k in low for k in embed_kw):
+            return 'embed'
+        if any(k in low for k in vlm_kw):
+            return 'vlm'
+        if any(k in low for k in chat_kw):
+            return 'chat'
+        return 'other'
+
+    categorized = {'全部模型': [], 'chat 模型': [], 'vlm 视觉模型': [], 'embed 模型': [], '其他': []}
+    for mid in model_ids:
+        categorized['全部模型'].append(mid)
+        cat = _classify(mid)
+        if cat == 'embed':
+            categorized['embed 模型'].append(mid)
+        elif cat == 'vlm':
+            categorized['vlm 视觉模型'].append(mid)
+        elif cat == 'chat':
+            categorized['chat 模型'].append(mid)
+        else:
+            categorized['其他'].append(mid)
+
+    # 移除空分类
+    categorized = {k: v for k, v in categorized.items() if v}
+    msg = f"✅ 获取到 {len(model_ids)} 个模型"
+    return categorized, msg
+
+
+def _make_model_selector(label, default_value, info=""):
+    """创建模型选择器组件（类型筛选 + 下拉选择 + 重新获取按钮）"""
+    with gr.Row():
+        model_type = gr.Dropdown(
+            choices=["全部模型", "chat 模型", "vlm 视觉模型", "embed 模型", "其他"],
+            value="全部模型",
+            label="模型分类",
+            scale=1,
+        )
+        fetch_btn = gr.Button("🔄 重新获取", scale=0, variant="secondary", min_width=100)
+    model_select = gr.Dropdown(
+        choices=[default_value] if default_value else [],
+        value=default_value,
+        label=label,
+        info=info,
+        filterable=True,
+        allow_custom_value=True,
+    )
+    fetch_status = gr.Textbox(visible=False, max_lines=1)
+    return model_type, model_select, fetch_btn, fetch_status
+
+
+def _bind_model_fetch(fetch_btn, model_type, model_select, fetch_status, provider_info, default_value):
+    """绑定模型获取和筛选事件。provider_info 是 gr.State，存储当前供应商的 {base_url, api_key}。"""
+    _models_cache = gr.State({})
+
+    def _do_fetch(prov):
+        url = prov.get("base_url", "") if isinstance(prov, dict) else ""
+        key = prov.get("api_key", "") if isinstance(prov, dict) else ""
+        categorized, msg = _fetch_models(url, key)
+        all_models = categorized.get("全部模型", [])
+        return (
+            gr.update(choices=list(categorized.keys()), value="全部模型"),
+            gr.update(choices=all_models, value=default_value if default_value in all_models else (all_models[0] if all_models else "")),
+            msg,
+            categorized,
+        )
+
+    fetch_btn.click(
+        _do_fetch,
+        inputs=[provider_info],
+        outputs=[model_type, model_select, fetch_status, _models_cache],
+    )
+
+    def _filter_models(type_val, cache):
+        if not cache:
+            return gr.update()
+        if type_val in cache:
+            return gr.update(choices=cache[type_val])
+        return gr.update(choices=cache.get("全部模型", []))
+
+    model_type.change(
+        _filter_models,
+        inputs=[model_type, _models_cache],
+        outputs=[model_select],
+    )
+
+    return _do_fetch  # 返回函数供供应商切换时调用
+
+
+def _bind_model_fetch_local(fetch_btn, model_type, model_select, fetch_status, url_component, key_component, default_value):
+    """绑定模型获取事件（使用 Tab 自有的 URL/Key 输入组件）。"""
+    _models_cache = gr.State({})
+
+    def _do_fetch(url, key):
+        categorized, msg = _fetch_models(url, key)
+        all_models = categorized.get("全部模型", [])
+        return (
+            gr.update(choices=list(categorized.keys()), value="全部模型"),
+            gr.update(choices=all_models, value=default_value if default_value in all_models else (all_models[0] if all_models else "")),
+            msg,
+            categorized,
+        )
+
+    fetch_btn.click(
+        _do_fetch,
+        inputs=[url_component, key_component],
+        outputs=[model_type, model_select, fetch_status, _models_cache],
+    )
+
+    def _filter_models(type_val, cache):
+        if not cache:
+            return gr.update()
+        if type_val in cache:
+            return gr.update(choices=cache[type_val])
+        return gr.update(choices=cache.get("全部模型", []))
+
+    model_type.change(
+        _filter_models,
+        inputs=[model_type, _models_cache],
+        outputs=[model_select],
+    )
+
+
 # ============================================================
 # 构建 Gradio 界面
 # ============================================================
@@ -518,8 +662,149 @@ footer { visibility: hidden; }
 def build_ui():
     s = {k: config.load_state(k) for k in ["rename","score","ocr","compress","translate","benchmark"]}
 
+    # 加载供应商列表
+    _prov_list, _prov_active = config.load_providers()
+    _active_prov = config.get_active_provider()
+
     with gr.Blocks(title="LocalAITools") as app:
         gr.Markdown("# LocalAITools - 本地 AI 工具箱")
+
+        # ==================== 全局供应商选择器 ====================
+        with gr.Row(equal_height=True):
+            provider_select = gr.Dropdown(
+                choices=[p["name"] for p in _prov_list],
+                value=_prov_active,
+                label="供应商",
+                scale=2,
+            )
+            prov_add_btn = gr.Button("➕ 添加", scale=0, variant="secondary", min_width=70)
+            prov_edit_btn = gr.Button("✏️ 编辑", scale=0, variant="secondary", min_width=70)
+            prov_del_btn = gr.Button("🗑️ 删除", scale=0, variant="secondary", min_width=70)
+        prov_info_text = gr.Markdown(
+            f"📡 **API:** `{_active_prov['base_url']}`",
+            elem_classes="hint"
+        )
+
+        # 供应商编辑区域（默认隐藏）
+        with gr.Accordion("添加/编辑供应商", open=False, visible=True) as prov_editor:
+            with gr.Row():
+                prov_name = gr.Textbox(label="名称", placeholder="如：硅基流动", scale=1)
+                prov_url = gr.Textbox(label="API Base URL", placeholder="https://api.siliconflow.cn/v1", scale=2)
+                prov_key = gr.Textbox(label="API Key", type="password", scale=2)
+            with gr.Row():
+                prov_save_btn = gr.Button("💾 保存", variant="primary", scale=1)
+                prov_cancel_btn = gr.Button("取消", variant="secondary", scale=1)
+            prov_msg = gr.Markdown("")
+
+        # 全局状态：当前供应商信息
+        provider_info = gr.State({"base_url": _active_prov["base_url"], "api_key": _active_prov["api_key"]})
+        # 供应商列表状态
+        providers_state = gr.State({"list": _prov_list, "active": _prov_active})
+        # 编辑模式状态：None 或 "add" 或 "edit"
+        prov_edit_mode = gr.State(None)
+
+        # ---- 供应商操作函数 ----
+        def _refresh_provider_select(providers):
+            """刷新供应商下拉框选项"""
+            names = [p["name"] for p in providers["list"]]
+            return gr.update(choices=names, value=providers["active"])
+
+        def _on_provider_change(name, providers):
+            """切换供应商"""
+            if not name:
+                return gr.update(), {}, providers
+            for p in providers["list"]:
+                if p["name"] == name:
+                    providers["active"] = name
+                    config.save_providers(providers["list"], name)
+                    info_md = f"📡 **API:** `{p['base_url']}`"
+                    return info_md, {"base_url": p["base_url"], "api_key": p["api_key"]}, providers
+            return gr.update(), {}, providers
+
+        def _on_prov_add(providers):
+            """打开添加面板"""
+            return gr.update(open=True), "", "", "", "add", ""
+
+        def _on_prov_edit(providers):
+            """打开编辑面板"""
+            name = providers.get("active", "")
+            for p in providers["list"]:
+                if p["name"] == name:
+                    return gr.update(open=True), p["name"], p["base_url"], p["api_key"], "edit", ""
+            return gr.update(open=True), "", "", "", "edit", ""
+
+        def _on_prov_save(mode, old_name, name, url, key, providers):
+            """保存供应商"""
+            if not name.strip():
+                return "❌ 名称不能为空", providers
+            if not url.strip():
+                return "❌ URL 不能为空", providers
+
+            if mode == "add":
+                if any(p["name"] == name.strip() for p in providers["list"]):
+                    return f"❌ 已存在同名供应商「{name.strip()}」", providers
+                providers["list"].append({"name": name.strip(), "base_url": url.strip(), "api_key": key.strip()})
+                providers["active"] = name.strip()
+            elif mode == "edit":
+                for p in providers["list"]:
+                    if p["name"] == old_name:
+                        p["name"] = name.strip()
+                        p["base_url"] = url.strip()
+                        p["api_key"] = key.strip()
+                        break
+                if providers["active"] == old_name:
+                    providers["active"] = name.strip()
+
+            config.save_providers(providers["list"], providers["active"])
+            return f"✅ 已保存供应商「{name.strip()}」", providers
+
+        def _on_prov_delete(providers):
+            """删除当前供应商"""
+            name = providers.get("active", "")
+            if len(providers["list"]) <= 1:
+                return "❌ 至少保留一个供应商", providers, gr.update(), gr.update()
+            providers["list"] = [p for p in providers["list"] if p["name"] != name]
+            providers["active"] = providers["list"][0]["name"]
+            config.save_providers(providers["list"], providers["active"])
+            new_active = providers["list"][0]
+            names = [p["name"] for p in providers["list"]]
+            info_md = f"📡 **API:** `{new_active['base_url']}`"
+            return f"✅ 已删除供应商「{name}」", providers, gr.update(choices=names, value=providers["active"]), info_md
+
+        # ---- 绑定供应商事件 ----
+        prov_add_btn.click(
+            _on_prov_add,
+            inputs=[providers_state],
+            outputs=[prov_editor, prov_name, prov_url, prov_key, prov_edit_mode, prov_msg],
+        )
+        prov_edit_btn.click(
+            _on_prov_edit,
+            inputs=[providers_state],
+            outputs=[prov_editor, prov_name, prov_url, prov_key, prov_edit_mode, prov_msg],
+        )
+        def _on_prov_save_and_refresh(mode, old_name, name, url, key, providers):
+            """保存供应商并返回所有需要更新的状态"""
+            msg, providers = _on_prov_save(mode, old_name, name, url, key, providers)
+            prov_names = [p["name"] for p in providers["list"]]
+            active_prov = None
+            for p in providers["list"]:
+                if p["name"] == providers["active"]:
+                    active_prov = p
+                    break
+            info_md = f"📡 **API:** `{active_prov['base_url']}`" if active_prov else ""
+            prov_info = {"base_url": active_prov["base_url"], "api_key": active_prov["api_key"]} if active_prov else {}
+            return msg, providers, gr.update(choices=prov_names, value=providers["active"]), info_md, prov_info
+
+        def _on_prov_delete_and_refresh(providers):
+            """删除供应商并返回所有需要更新的状态"""
+            msg, providers, new_select, info_md = _on_prov_delete(providers)
+            active_prov = None
+            for p in providers["list"]:
+                if p["name"] == providers["active"]:
+                    active_prov = p
+                    break
+            prov_info = {"base_url": active_prov["base_url"], "api_key": active_prov["api_key"]} if active_prov else {}
+            return msg, providers, new_select, info_md, prov_info
 
         # ==================== Tab 0: 开始使用（新手引导） ====================
         with gr.Tab("🏠 开始使用"):
@@ -627,8 +912,9 @@ ollama pull qwen3     # 下载模型
                                           placeholder="粘贴图片所在文件夹的完整路径",
                                           info="支持 .jpg / .jpeg / .png / .webp / .avif / .gif")
                     with gr.Accordion("⚙️ 高级设置", open=False):
-                        rn_model = gr.Textbox(label="模型名称", value=s["rename"].get("model", config.RENAME_MODEL),
-                                              info="需要视觉模型，能理解图片内容")
+                        rn_model_type, rn_model, rn_fetch_btn, rn_fetch_st = _make_model_selector(
+                            "视觉模型", s["rename"].get("model", config.RENAME_MODEL),
+                            "需要视觉模型，能理解图片内容")
                         rn_workers = gr.Slider(1, 8, value=s["rename"].get("workers", config.DEFAULT_WORKERS), step=1,
                                                label="并行线程数", info="越大越快，但可能触发 API 限流")
                     rn_dry = gr.Checkbox(label="试运行（只预览不实际改名）", value=s["rename"].get("dry_run", False),
@@ -645,6 +931,8 @@ ollama pull qwen3     # 下载模型
                 request_stop()
                 return "⏹️ 已请求停止..."
             rn_stop.click(_stop_rename, outputs=[rn_output])
+            _bind_model_fetch(rn_fetch_btn, rn_model_type, rn_model, rn_fetch_st,
+                             provider_info, config.RENAME_MODEL)
 
         # ==================== Tab 2: 图片质量评分与分类 ====================
         with gr.Tab("🔍 图片质量评分与分类"):
@@ -684,8 +972,9 @@ ollama pull qwen3     # 下载模型
                                           value=s["score"].get("input_dir", str(config.DATA_DIR / "images")),
                                           placeholder="粘贴图片所在文件夹的完整路径",
                                           info="评分结果保存为同名 .txt 文件")
-                    de_model = gr.Textbox(label="视觉模型", value=s["score"].get("model", config.VISION_MODEL),
-                                          info="需要视觉模型。留空使用设置页默认值")
+                    de_model_type, de_model, de_fetch_btn, de_fetch_st = _make_model_selector(
+                        "视觉模型", s["score"].get("model", config.VISION_MODEL),
+                        "需要视觉模型。留空使用设置页默认值")
                     de_prompt = gr.Textbox(
                         label="自定义评分提示词（留空使用默认）",
                         value=s["score"].get("custom_prompt", ""),
@@ -748,6 +1037,8 @@ ollama pull qwen3     # 下载模型
             de_score_event = de_score_btn.click(_score_images, [de_input, de_mode, de_prompt, de_model], [de_score_output])
             de_score_stop.click(_stop_scoring, outputs=[de_score_output])
             de_cls_btn.click(_classify_images, [de_input, de_cls_method, de_top, de_bottom, de_min, de_max], [de_cls_output])
+            _bind_model_fetch(de_fetch_btn, de_model_type, de_model, de_fetch_st,
+                             provider_info, config.VISION_MODEL)
 
             # ---- 手动审核区域 ----
             gr.Markdown("### ③ 手动审核（逐张查看评分并手动分类）")
@@ -881,8 +1172,9 @@ ollama pull qwen3     # 下载模型
                                           placeholder="粘贴聊天截图所在文件夹的完整路径",
                                           info="支持 .jpg / .jpeg / .png / .bmp / .webp")
                     with gr.Accordion("⚙️ 高级设置", open=False):
-                        ei_model = gr.Textbox(label="视觉模型", value=s["ocr"].get("model", config.VISION_MODEL_THINKING),
-                                              info="需要视觉模型，推荐带 Thinking 能力的模型")
+                        ei_model_type, ei_model, ei_fetch_btn, ei_fetch_st = _make_model_selector(
+                            "视觉模型", s["ocr"].get("model", config.VISION_MODEL_THINKING),
+                            "需要视觉模型，推荐带 Thinking 能力的模型")
                         ei_temp = gr.Slider(0.0, 1.0, value=s["ocr"].get("temperature", 0.3), step=0.1, label="温度",
                                             info="越低越稳定，越高越有创意。OCR 任务建议 0.2-0.4")
                         ei_workers = gr.Slider(1, 4, value=s["ocr"].get("workers", 1), step=1, label="并行图片数",
@@ -903,6 +1195,8 @@ ollama pull qwen3     # 下载模型
                 request_stop()
                 return "⏹️ 已请求停止..."
             ei_stop.click(_stop_ocr, outputs=[ei_output])
+            _bind_model_fetch(ei_fetch_btn, ei_model_type, ei_model, ei_fetch_st,
+                             provider_info, config.VISION_MODEL_THINKING)
 
         # ==================== Tab 4: 聊天记录压缩 ====================
         with gr.Tab("📝 聊天记录压缩"):
@@ -918,8 +1212,9 @@ ollama pull qwen3     # 下载模型
                                           placeholder="粘贴聊天记录 TXT 文件或文件夹路径",
                                           info="可以是单个 .txt 文件，也可以是装多个 .txt 的文件夹")
                     with gr.Accordion("⚙️ 高级设置", open=False):
-                        ct_model = gr.Textbox(label="文本模型", value=s["compress"].get("model", config.VISION_MODEL_THINKING),
-                                              info="纯文本任务，用普通文本模型即可，不必用视觉模型")
+                        ct_model_type, ct_model, ct_fetch_btn, ct_fetch_st = _make_model_selector(
+                            "文本模型", s["compress"].get("model", config.VISION_MODEL_THINKING),
+                            "纯文本任务，用普通文本模型即可，不必用视觉模型")
                         ct_temp = gr.Slider(0.0, 0.5, value=s["compress"].get("temperature", 0.2), step=0.05, label="温度",
                                             info="精简任务建议低温 0.1-0.3，保持稳定")
                         ct_chunk = gr.Slider(5000, 50000, value=s["compress"].get("chunk_size", config.DEFAULT_CHUNK_SIZE), step=1000,
@@ -941,6 +1236,8 @@ ollama pull qwen3     # 下载模型
                 request_stop()
                 return "⏹️ 已请求停止..."
             ct_stop.click(_stop_compress, outputs=[ct_output])
+            _bind_model_fetch(ct_fetch_btn, ct_model_type, ct_model, ct_fetch_st,
+                             provider_info, config.VISION_MODEL_THINKING)
 
         # ==================== Tab 5: 文本翻译 ====================
         with gr.Tab("🌐 文本翻译"):
@@ -961,8 +1258,9 @@ ollama pull qwen3     # 下载模型
                                                 placeholder="留空则自动保存到 outputs/translation/translation.txt",
                                                 info="指定译文保存路径，留空自动生成")
                     with gr.Accordion("⚙️ 高级设置", open=False):
-                        tr_model = gr.Textbox(label="模型名称", value=s["translate"].get("model", config.TEXT_MODEL),
-                                              info="纯文本翻译任务，使用文本模型")
+                        tr_model_type, tr_model, tr_fetch_btn, tr_fetch_st = _make_model_selector(
+                            "文本模型", s["translate"].get("model", config.TEXT_MODEL),
+                            "纯文本翻译任务，使用文本模型")
                         tr_batch = gr.Slider(1, 20, value=s["translate"].get("batch_size", 10), step=1, label="每批章节数",
                                              info="每批同时翻译多少章。越大越快但可能超时")
                         tr_workers = gr.Slider(1, 4, value=s["translate"].get("workers", 2), step=1, label="并行线程数",
@@ -979,6 +1277,8 @@ ollama pull qwen3     # 下载模型
                 request_stop()
                 return "⏹️ 已请求停止..."
             tr_stop.click(_stop_translate, outputs=[tr_output])
+            _bind_model_fetch(tr_fetch_btn, tr_model_type, tr_model, tr_fetch_st,
+                             provider_info, config.TEXT_MODEL)
 
         # ==================== Tab 6: 知识库问答 ====================
         with gr.Tab("📚 知识库问答"):
@@ -1000,8 +1300,9 @@ ollama pull qwen3     # 下载模型
                                             value="",
                                             info="过滤掉不包含该关键词的段落，能显著提高答案精度")
                     with gr.Accordion("⚙️ 高级设置", open=False):
-                        kb_model = gr.Textbox(label="模型名称", value=config.TEXT_MODEL,
-                                              info="用于最终回答生成的文本模型")
+                        kb_model_type, kb_model, kb_fetch_btn, kb_fetch_st = _make_model_selector(
+                            "文本模型", config.TEXT_MODEL,
+                            "用于最终回答生成的文本模型")
                         kb_k = gr.Slider(10, 200, value=50, step=10, label="检索片段数",
                                          info="从知识库中检索多少个相关段落。越多越全面但越慢")
                         kb_batch = gr.Slider(5, 50, value=20, step=5, label="每批处理数",
@@ -1018,6 +1319,8 @@ ollama pull qwen3     # 下载模型
                 request_stop()
                 return "⏹️ 已请求停止..."
             kb_stop.click(_stop_kb, outputs=[kb_output])
+            _bind_model_fetch(kb_fetch_btn, kb_model_type, kb_model, kb_fetch_st,
+                             provider_info, config.TEXT_MODEL)
 
         # ==================== Tab 7: LLM 压测 ====================
         with gr.Tab("⚡ LLM 压测"):
@@ -1036,8 +1339,9 @@ ollama pull qwen3     # 下载模型
                     gr.Markdown("### 连接配置")
                     bm_url = gr.Textbox(label="API Base URL", value=s["benchmark"].get("url", config.OPENAI_BASE_URL),
                                         info="被测 API 地址，如 http://localhost:1234/v1")
-                    bm_model = gr.Textbox(label="模型名称", value=s["benchmark"].get("model", config.BENCHMARK_MODEL),
-                                          info="被测模型，需与 API 中实际名称一致")
+                    bm_model_type, bm_model, bm_fetch_btn, bm_fetch_st = _make_model_selector(
+                        "被测模型", s["benchmark"].get("model", config.BENCHMARK_MODEL),
+                        "被测模型，需与 API 中实际名称一致")
                     bm_key = gr.Textbox(label="API Key", value=s["benchmark"].get("api_key", config.OPENAI_API_KEY), type="password",
                                         info="本地服务如 LM Studio 填任意值即可")
                     gr.Markdown("### 测试参数")
@@ -1065,6 +1369,8 @@ ollama pull qwen3     # 下载模型
                 request_stop()
                 return "⏹️ 已请求停止..."
             bm_stop.click(_stop_benchmark, outputs=[bm_text])
+            _bind_model_fetch_local(bm_fetch_btn, bm_model_type, bm_model, bm_fetch_st,
+                             bm_url, bm_key, s["benchmark"].get("model", config.BENCHMARK_MODEL))
 
         # ==================== Tab 8: 设置 ====================
         with gr.Tab("⚙️ 设置"):
@@ -1136,13 +1442,16 @@ ollama pull qwen3     # 下载模型
                                        info="与上方「API 连接」分组中的地址保持一致")
                 test_key = gr.Textbox(label="API 密钥", value=config.OPENAI_API_KEY, type="password",
                                       info="本地服务填任意值即可")
-                test_model = gr.Textbox(label="模型名称（可选）", value=config.VISION_MODEL,
-                                        info="测试时仅检查该模型是否在可用列表中，留空则只列出模型")
+                test_model_type, test_model, test_fetch_btn, test_fetch_st = _make_model_selector(
+                    "模型名称（可选）", config.VISION_MODEL,
+                    "测试时仅检查该模型是否在可用列表中，留空则只列出模型")
                 test_btn = gr.Button("🔗 测试连接", variant="secondary")
                 test_msg = gr.Textbox(label="测试结果", interactive=False, lines=5, elem_classes="output-text",
                                       placeholder="测试结果会显示在这里...")
 
             test_btn.click(_test_api_connection, [test_base, test_key, test_model], [test_msg])
+            _bind_model_fetch_local(test_fetch_btn, test_model_type, test_model, test_fetch_st,
+                             test_base, test_key, config.VISION_MODEL)
 
             # ---- 手动更新区域 ----
             gr.Markdown("---")
@@ -1165,6 +1474,49 @@ ollama pull qwen3     # 下载模型
 
             check_btn.click(_on_check, [], [update_output])
             update_btn.click(_do_update, [], [update_output])
+
+        # ==================== 供应商切换 → 自动刷新所有模型列表 ====================
+        def _refresh_all_models(prov):
+            """供应商切换后，一次性刷新所有 Tab 的模型下拉框"""
+            url = prov.get("base_url", "") if isinstance(prov, dict) else ""
+            key = prov.get("api_key", "") if isinstance(prov, dict) else ""
+            categorized, msg = _fetch_models(url, key)
+            all_models = categorized.get("全部模型", [])
+            cat_choices = list(categorized.keys())
+
+            def _upd(default):
+                val = default if default in all_models else (all_models[0] if all_models else "")
+                return gr.update(choices=all_models, value=val), gr.update(choices=cat_choices, value="全部模型")
+
+            rn_m, rn_t = _upd(config.RENAME_MODEL)
+            de_m, de_t = _upd(config.VISION_MODEL)
+            ei_m, ei_t = _upd(config.VISION_MODEL_THINKING)
+            ct_m, ct_t = _upd(config.VISION_MODEL_THINKING)
+            tr_m, tr_t = _upd(config.TEXT_MODEL)
+            kb_m, kb_t = _upd(config.TEXT_MODEL)
+            return (rn_m, rn_t, de_m, de_t, ei_m, ei_t, ct_m, ct_t, tr_m, tr_t, kb_m, kb_t)
+
+        _model_outputs = [rn_model, rn_model_type, de_model, de_model_type,
+                          ei_model, ei_model_type, ct_model, ct_model_type,
+                          tr_model, tr_model_type, kb_model, kb_model_type]
+
+        prov_save_btn.click(
+            _on_prov_save_and_refresh,
+            inputs=[prov_edit_mode, prov_name, prov_name, prov_url, prov_key, providers_state],
+            outputs=[prov_msg, providers_state, provider_select, prov_info_text, provider_info],
+        ).then(_refresh_all_models, inputs=[provider_info], outputs=_model_outputs)
+
+        prov_del_btn.click(
+            _on_prov_delete_and_refresh,
+            inputs=[providers_state],
+            outputs=[prov_msg, providers_state, provider_select, prov_info_text, provider_info],
+        ).then(_refresh_all_models, inputs=[provider_info], outputs=_model_outputs)
+
+        provider_select.change(
+            _on_provider_change,
+            inputs=[provider_select, providers_state],
+            outputs=[prov_info_text, provider_info, providers_state],
+        ).then(_refresh_all_models, inputs=[provider_info], outputs=_model_outputs)
 
     return app
 
