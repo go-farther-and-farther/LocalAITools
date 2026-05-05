@@ -30,6 +30,8 @@ BENCHMARK_MODEL = os.getenv("BENCHMARK_MODEL", "qwen3.6-35b-a3b@iq2_xxs")
 # 留空则使用 HuggingFace 默认在线下载；填写本地绝对路径可离线使用
 EMBEDDING_MODEL_PATH = os.getenv("EMBEDDING_MODEL_PATH", "")
 FAISS_INDEX_PATH = os.getenv("FAISS_INDEX_PATH", "faiss_index")
+KB_CHUNK_SIZE = int(os.getenv("KB_CHUNK_SIZE", "500"))
+KB_CHUNK_OVERLAP = int(os.getenv("KB_CHUNK_OVERLAP", "50"))
 
 # ==================== 并发与重试 ====================
 DEFAULT_WORKERS = int(os.getenv("DEFAULT_WORKERS", "2"))

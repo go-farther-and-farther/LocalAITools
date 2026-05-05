@@ -38,9 +38,8 @@ def _init_kb():
     model_path = config.EMBEDDING_MODEL_PATH or "BAAI/bge-small-zh-v1.5"
     _embeddings = HuggingFaceEmbeddings(
         model_name=model_path,
-        model_kwargs={'device': 'cpu'},
+        model_kwargs={'device': 'cpu', 'cache_dir': str(config.DATA_DIR / "models")},
         encode_kwargs={'normalize_embeddings': True},
-        cache_folder=str(config.DATA_DIR / "models"),
     )
     _vector = FAISS.load_local(
         config.FAISS_INDEX_PATH, _embeddings, allow_dangerous_deserialization=True
@@ -122,6 +121,24 @@ PROMPT_RN = """
 请用中文回答用户问题。
 """
 
+PROMPT_CHAT = """
+你是一个知识库问答助手。根据检索到的相关文档内容回答用户问题。
+
+要求：
+- 回答完全依据下方已知信息，不要编造
+- 如果信息不足，坦诚说明
+- 结合对话历史理解上下文和指代关系
+- 回答简洁准确，重点突出
+
+{chat_history}
+
+【已知信息】
+{info}
+
+用户问：
+{question}
+"""
+
 
 def query_knowledge_base(
     query: str,
@@ -189,6 +206,69 @@ def query_knowledge_base(
         for i, ans in enumerate(answers, 1):
             lines.append(f"\n### 第 {i} 轮\n{ans[:500]}{'...' if len(ans) > 500 else ''}")
     return "\n\n".join(lines)
+
+
+def query_knowledge_base_chat(
+    query: str,
+    keyword: str = "",
+    model: Optional[str] = None,
+    k: int = 50,
+    batch_size: int = 20,
+    chat_history: Optional[List[dict]] = None,
+    progress_callback=None,
+) -> str:
+    """多轮对话式知识库问答。chat_history: [{"role": "user"/"assistant", "content": "..."}]"""
+    _init_kb()
+
+    def _log(msg: str):
+        if progress_callback:
+            progress_callback(msg)
+
+    _log(f"混合检索中... (共 {len(_all_texts)} 个文档块)")
+    docs = _hybrid_retrieve(query, k=k)
+    _log(f"检索到 {len(docs)} 个片段")
+
+    if keyword.strip():
+        docs = [d for d in docs if keyword.strip() in d.page_content]
+        _log(f"关键词「{keyword}」过滤后剩余 {len(docs)} 个片段")
+
+    if not docs:
+        return "未找到相关文档片段，请调整查询或关键词。"
+
+    # 构建对话历史文本
+    history_lines = []
+    if chat_history:
+        for msg in chat_history[-10:]:  # 最近10轮
+            role = "用户" if msg["role"] == "user" else "助手"
+            history_lines.append(f"{role}：{msg['content']}")
+    chat_history_text = "\n".join(history_lines) if history_lines else "（无历史对话）"
+
+    # 合并所有检索片段
+    all_info = "\n\n".join(d.page_content for d in docs[:batch_size * 2])
+
+    llm = ChatOpenAI(
+        model=model or config.TEXT_MODEL,
+        streaming=True,
+        base_url=config.OPENAI_BASE_URL,
+        api_key=config.OPENAI_API_KEY,
+        extra_body=config.get_llm_extra_body()
+    )
+
+    _stop_flag.clear()
+    _log("正在生成回答...")
+
+    prompt = PromptTemplate.from_template(PROMPT_CHAT).format(
+        chat_history=chat_history_text,
+        info=all_info,
+        question=query,
+    )
+
+    try:
+        answer = llm.invoke(prompt).content
+    except Exception as e:
+        return f"❌ 调用失败: {e}"
+
+    return answer
 
 
 # ==================== CLI ====================
