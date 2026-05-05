@@ -523,6 +523,7 @@ def run_benchmark(
     print(f"{'='*80}\n")
 
     _stop_flag.clear()
+    Path(save_json).parent.mkdir(parents=True, exist_ok=True)
     bench_start = time.time()
     all_stats = []
     detailed_results = []

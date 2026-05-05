@@ -47,9 +47,24 @@ def _capture_log(fn, *args, **kwargs):
 
 
 # ============================================================
+# 工具函数通用：应用供应商配置
+# ============================================================
+def _apply_provider(prov):
+    """将供应商信息写入环境变量，使 config 模块读取到正确的 API 地址和密钥"""
+    if prov and isinstance(prov, dict):
+        if prov.get("base_url"):
+            os.environ["OPENAI_BASE_URL"] = prov["base_url"]
+            config.OPENAI_BASE_URL = prov["base_url"]
+        if prov.get("api_key") is not None:
+            os.environ["OPENAI_API_KEY"] = prov["api_key"]
+            config.OPENAI_API_KEY = prov["api_key"]
+
+
+# ============================================================
 # Tab 1: 图片重命名
 # ============================================================
-def _rename_images(input_dir, model, workers, dry_run, thinking=True, progress=gr.Progress()):
+def _rename_images(input_dir, model, workers, dry_run, keep_original, mode, provider, thinking=True, progress=gr.Progress()):
+    _apply_provider(provider)
     os.environ["ENABLE_THINKING"] = "true" if thinking else "false"
     from image_tools.rename_images import process_one_image, get_shared_llm
     from collections import deque
@@ -78,7 +93,7 @@ def _rename_images(input_dir, model, workers, dry_run, thinking=True, progress=g
     from image_tools.rename_images import _stop_flag
     _stop_flag.clear()
     with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = {executor.submit(process_one_image, img, model or config.RENAME_MODEL, dry_run, recent_history): img
+        futures = {executor.submit(process_one_image, img, model or config.RENAME_MODEL, dry_run, recent_history, keep_original, mode): img
                    for img in images}
         for i, future in enumerate(as_completed(futures)):
             if _stop_flag.is_set():
@@ -105,7 +120,8 @@ def _rename_images(input_dir, model, workers, dry_run, thinking=True, progress=g
 # ============================================================
 # Tab 2: 图片质量评分
 # ============================================================
-def _score_images(input_dir, mode, custom_prompt, model, thinking=True, progress=gr.Progress()):
+def _score_images(input_dir, mode, custom_prompt, model, provider, thinking=True, progress=gr.Progress()):
+    _apply_provider(provider)
     os.environ["ENABLE_THINKING"] = "true" if thinking else "false"
     from image_tools.detect_ai_errors import score_images
 
@@ -140,7 +156,8 @@ def _classify_images(input_dir, classify_method, top_percent, bottom_percent,
 # Tab 3: 聊天截图识别
 # ============================================================
 def _explain_images(input_dir, vision_model, temperature, workers, internal_workers, max_tokens,
-                    thinking=True, progress=gr.Progress()):
+                    provider, thinking=True, progress=gr.Progress()):
+    _apply_provider(provider)
     os.environ["ENABLE_THINKING"] = "true" if thinking else "false"
     from image_tools.ocr_chat_screenshots import process_folder
 
@@ -178,7 +195,8 @@ def _explain_images(input_dir, vision_model, temperature, workers, internal_work
 # Tab 4: 聊天记录压缩
 # ============================================================
 def _compress_text(input_path, model, temperature, chunk_size, internal_workers, max_tokens,
-                   thinking=True, progress=gr.Progress()):
+                   provider, thinking=True, progress=gr.Progress()):
+    _apply_provider(provider)
     os.environ["ENABLE_THINKING"] = "true" if thinking else "false"
     from text_tools.compress_chat import process_single_text_file, process_folder
 
@@ -215,7 +233,8 @@ def _compress_text(input_path, model, temperature, chunk_size, internal_workers,
 # ============================================================
 # Tab 5: 文本翻译
 # ============================================================
-def _translate(input_file, output_file, model, batch_size, workers, thinking=True, progress=gr.Progress()):
+def _translate(input_file, output_file, model, batch_size, workers, provider, thinking=True, progress=gr.Progress()):
+    _apply_provider(provider)
     os.environ["ENABLE_THINKING"] = "true" if thinking else "false"
     from text_tools.translate import translate_book_parallel
 
@@ -248,7 +267,8 @@ def _translate(input_file, output_file, model, batch_size, workers, thinking=Tru
 # ============================================================
 # Tab 6: 知识库问答
 # ============================================================
-def _query_kb(query, keyword, model, k, batch_size, thinking=True, progress=gr.Progress()):
+def _query_kb(query, keyword, model, k, batch_size, provider, thinking=True, progress=gr.Progress()):
+    _apply_provider(provider)
     os.environ["ENABLE_THINKING"] = "true" if thinking else "false"
     from text_tools.chapter_summary import query_knowledge_base
 
@@ -678,7 +698,24 @@ def build_ui():
     _active_prov = config.get_active_provider()
 
     with gr.Blocks(title="LocalAITools") as app:
-        gr.Markdown("# LocalAITools - 本地 AI 工具箱")
+        with gr.Row(equal_height=True):
+            gr.Markdown("# LocalAITools - 本地 AI 工具箱", elem_classes="hint")
+            restart_btn_top = gr.Button("🔄 重启", variant="secondary", scale=0, min_width=70)
+        restart_msg = gr.Textbox("", interactive=False, container=False, show_label=False, visible=False)
+
+        def _on_restart():
+            print("\n🔄 用户请求重启...")
+            import threading, subprocess
+            def _do_restart():
+                import time
+                time.sleep(1.5)
+                script = str(Path(__file__).resolve())
+                subprocess.Popen([sys.executable, script] + sys.argv[1:])
+                os._exit(0)
+            threading.Thread(target=_do_restart, daemon=True).start()
+            return gr.update(value="🔄 正在重启...", visible=True)
+
+        restart_btn_top.click(_on_restart, outputs=[restart_msg])
 
         # ==================== 全局供应商选择器 ====================
         with gr.Row(equal_height=True):
@@ -688,13 +725,13 @@ def build_ui():
                 label="供应商",
                 scale=2,
             )
-            prov_add_btn = gr.Button("➕ 添加", scale=0, variant="secondary", min_width=70)
-            prov_edit_btn = gr.Button("✏️ 编辑", scale=0, variant="secondary", min_width=70)
-            prov_del_btn = gr.Button("🗑️ 删除", scale=0, variant="secondary", min_width=70)
-        prov_info_text = gr.Markdown(
-            f"📡 **API:** `{_active_prov['base_url']}`",
-            elem_classes="hint"
-        )
+            prov_add_btn = gr.Button("➕", scale=0, variant="secondary", min_width=40)
+            prov_edit_btn = gr.Button("✏️", scale=0, variant="secondary", min_width=40)
+            prov_del_btn = gr.Button("🗑️", scale=0, variant="secondary", min_width=40)
+            prov_info_text = gr.Markdown(
+                f"📡 `{_active_prov['base_url']}`",
+                elem_classes="hint"
+            )
 
         # 供应商编辑区域（默认隐藏）
         with gr.Accordion("添加/编辑供应商", open=False, visible=True) as prov_editor:
@@ -728,7 +765,7 @@ def build_ui():
                 if p["name"] == name:
                     providers["active"] = name
                     config.save_providers(providers["list"], name)
-                    info_md = f"📡 **API:** `{p['base_url']}`"
+                    info_md = f"📡 `{p['base_url']}`"
                     return info_md, {"base_url": p["base_url"], "api_key": p["api_key"]}, providers
             return gr.update(), {}, providers
 
@@ -779,7 +816,7 @@ def build_ui():
             config.save_providers(providers["list"], providers["active"])
             new_active = providers["list"][0]
             names = [p["name"] for p in providers["list"]]
-            info_md = f"📡 **API:** `{new_active['base_url']}`"
+            info_md = f"📡 `{new_active['base_url']}`"
             return f"✅ 已删除供应商「{name}」", providers, gr.update(choices=names, value=providers["active"]), info_md
 
         # ---- 绑定供应商事件 ----
@@ -802,7 +839,7 @@ def build_ui():
                 if p["name"] == providers["active"]:
                     active_prov = p
                     break
-            info_md = f"📡 **API:** `{active_prov['base_url']}`" if active_prov else ""
+            info_md = f"📡 `{active_prov['base_url']}`" if active_prov else ""
             prov_info = {"base_url": active_prov["base_url"], "api_key": active_prov["api_key"]} if active_prov else {}
             return msg, providers, gr.update(choices=prov_names, value=providers["active"]), info_md, prov_info
 
@@ -931,15 +968,30 @@ ollama pull qwen3     # 下载模型
                                     "需要视觉模型，能理解图片内容")
                                 rn_workers = gr.Slider(1, 8, value=s["rename"].get("workers", config.DEFAULT_WORKERS), step=1,
                                                        label="并行线程数", info="越大越快，但可能触发 API 限流")
+                            rn_mode = gr.Dropdown(
+                                label="命名模式",
+                                choices=[
+                                    ("通用描述", "general"),
+                                    ("人像聚焦", "portrait"),
+                                    ("风景聚焦", "landscape"),
+                                    ("截图识别", "screenshot"),
+                                    ("美食聚焦", "food"),
+                                    ("动漫二次元", "anime"),
+                                ],
+                                value=s["rename"].get("mode", "general"),
+                                info="不同模式侧重不同描述风格"
+                            )
                             rn_dry = gr.Checkbox(label="试运行（只预览不实际改名）", value=s["rename"].get("dry_run", False),
                                                  info="强烈建议第一次使用时先试运行，看看效果")
+                            rn_keep = gr.Checkbox(label="保留原文件名", value=s["rename"].get("keep_original", False),
+                                                  info="在描述后面附加原始文件名，适合文件名含时间戳等有用信息的情况")
                             with gr.Row():
                                 rn_btn = gr.Button("开始重命名", variant="primary")
                                 rn_stop = gr.Button("停止", variant="stop")
                         with gr.Column(scale=3):
                             rn_output = gr.Textbox(label="处理结果", lines=15, elem_classes="output-text",
                                                    placeholder="处理完成后这里会显示每张图片的新名字...")
-                    rn_btn.click(_rename_images, [rn_input, rn_model, rn_workers, rn_dry, rn_thinking], [rn_output])
+                    rn_btn.click(_rename_images, [rn_input, rn_model, rn_workers, rn_dry, rn_keep, rn_mode, provider_info, rn_thinking], [rn_output])
                     def _stop_rename():
                         from image_tools.rename_images import request_stop
                         request_stop()
@@ -1048,7 +1100,7 @@ ollama pull qwen3     # 下载模型
                         request_stop()
                         return "⏹️ 已请求停止..."
 
-                    de_score_event = de_score_btn.click(_score_images, [de_input, de_mode, de_prompt, de_model, de_thinking], [de_score_output])
+                    de_score_event = de_score_btn.click(_score_images, [de_input, de_mode, de_prompt, de_model, provider_info, de_thinking], [de_score_output])
                     de_score_stop.click(_stop_scoring, outputs=[de_score_output])
                     de_cls_btn.click(_classify_images, [de_input, de_cls_method, de_top, de_bottom, de_min, de_max], [de_cls_output])
                     _bind_model_fetch(de_fetch_btn, de_model_type, de_model, de_fetch_st,
@@ -1203,7 +1255,7 @@ ollama pull qwen3     # 下载模型
                 with gr.Column(scale=3):
                     ei_output = gr.Textbox(label="处理日志", lines=15, elem_classes="output-text",
                                            placeholder="处理完成后这里会显示识别进度和结果...")
-            ei_btn.click(_explain_images, [ei_input, ei_model, ei_temp, ei_workers, ei_iworkers, ei_maxtok, ei_thinking], [ei_output])
+            ei_btn.click(_explain_images, [ei_input, ei_model, ei_temp, ei_workers, ei_iworkers, ei_maxtok, provider_info, ei_thinking], [ei_output])
             def _stop_ocr():
                 from image_tools.ocr_chat_screenshots import request_stop
                 request_stop()
@@ -1247,7 +1299,7 @@ ollama pull qwen3     # 下载模型
                         with gr.Column(scale=3):
                             ct_output = gr.Textbox(label="处理日志", lines=15, elem_classes="output-text",
                                                    placeholder="处理完成后这里会显示压缩进度...")
-                    ct_btn.click(_compress_text, [ct_input, ct_model, ct_temp, ct_chunk, ct_iw, ct_maxtok, ct_thinking], [ct_output])
+                    ct_btn.click(_compress_text, [ct_input, ct_model, ct_temp, ct_chunk, ct_iw, ct_maxtok, provider_info, ct_thinking], [ct_output])
                     def _stop_compress():
                         from text_tools.compress_chat import request_stop
                         request_stop()
@@ -1288,7 +1340,7 @@ ollama pull qwen3     # 下载模型
                         with gr.Column(scale=3):
                             tr_output = gr.Textbox(label="翻译日志", lines=15, elem_classes="output-text",
                                                    placeholder="处理完成后这里会显示翻译进度、已翻章节数...")
-                    tr_btn.click(_translate, [tr_input, tr_output_file, tr_model, tr_batch, tr_workers, tr_thinking], [tr_output])
+                    tr_btn.click(_translate, [tr_input, tr_output_file, tr_model, tr_batch, tr_workers, provider_info, tr_thinking], [tr_output])
                     def _stop_translate():
                         from text_tools.translate import request_stop
                         request_stop()
@@ -1330,7 +1382,7 @@ ollama pull qwen3     # 下载模型
                 with gr.Column(scale=3):
                     kb_output = gr.Textbox(label="回答结果", lines=18, elem_classes="output-text",
                                            placeholder="查询结果会显示在这里，包括进度和最终答案...")
-            kb_btn.click(_query_kb, [kb_query, kb_keyword, kb_model, kb_k, kb_batch, kb_thinking], [kb_output])
+            kb_btn.click(_query_kb, [kb_query, kb_keyword, kb_model, kb_k, kb_batch, provider_info, kb_thinking], [kb_output])
             def _stop_kb():
                 from text_tools.chapter_summary import request_stop
                 request_stop()

@@ -35,12 +35,8 @@ def request_stop():
     """请求停止当前正在执行的重命名任务"""
     _stop_flag.set()
 
-# ========== 统一的提示词模板 ==========
-PROMPT = """请用3-25个汉字简洁描述这张图片的内容。
-
-要求：
-1. **仅当你非常确定**确实是一个广为人知的作品名（游戏/动漫/电影/小说）、角色名或知名IP名称，并且该名称能与图像内容合理对应时，才可以在短句中**开头**使用它，格式为：《作品名》画面描述。
-2. **绝对不要编造或猜测作品名**。宁可不用，也不要用错。
+# ========== 多模式提示词模板 ==========
+_RENAME_SUFFIX = """
 
 以下信息可能对你有帮助：
 - 最近处理的图片的描述（可作风格参考，不必强制保持一致）:
@@ -50,6 +46,65 @@ PROMPT = """请用3-25个汉字简洁描述这张图片的内容。
   注意：原始文件名可能不准确，仅作为参考。如果它与图像内容明显不符，请忽略。
 
 仅输出短句本身，不要加引号、换行或任何解释："""
+
+GENERAL_PROMPT = """请用3-25个汉字简洁描述这张图片的内容。
+
+要求：
+1. **仅当你非常确定**确实是一个广为人知的作品名（游戏/动漫/电影/小说）、角色名或知名IP名称，并且该名称能与图像内容合理对应时，才可以在短句中**开头**使用它，格式为：《作品名》画面描述。
+2. **绝对不要编造或猜测作品名**。宁可不用，也不要用错。""" + _RENAME_SUFFIX
+
+PORTRAIT_PROMPT = """请用3-25个汉字描述这张图片中的人物。
+
+要求：
+- 侧重描述人物特征：外貌、穿着、表情、动作、姿态
+- 如果能判断场景，简要提及（如：室内、户外、舞台）
+- 可以描述人数（如：自拍、合影、三人照）
+- **仅当你非常确定**是知名人物或角色时才标注名字，格式为：《名字》描述
+- **绝对不要编造或猜测人名**""" + _RENAME_SUFFIX
+
+LANDSCAPE_PROMPT = """请用3-25个汉字描述这张图片的风景或场景。
+
+要求：
+- 侧重描述场景类型、季节、天气、光线氛围
+- 提及标志性建筑、地标或自然元素
+- 描述色彩和整体氛围（如：宁静、壮观、梦幻）
+- 如果能判断具体地点可以提及（如：公园、海边、雪山）
+- **不要编造具体地名**，除非能从画面中明确辨认""" + _RENAME_SUFFIX
+
+SCREENSHOT_PROMPT = """请用3-25个汉字描述这张截图的内容。
+
+要求：
+- 如果是聊天记录，描述聊天主题或关键对话内容
+- 如果是应用/网页截图，描述应用名称和主要界面内容
+- 如果包含文字信息，提炼关键文字
+- 如果是游戏截图，描述游戏画面和场景
+- 保持实用性，让人一眼知道这张截图是什么""" + _RENAME_SUFFIX
+
+FOOD_PROMPT = """请用3-25个汉字描述这张图片中的美食。
+
+要求：
+- 侧重描述菜品名称、食材、烹饪方式
+- 描述摆盘、色泽、用餐场景
+- 如果能判断 cuisine 类型可以提及（如：中式、日料、西餐）
+- 如果是餐厅场景，描述环境氛围""" + _RENAME_SUFFIX
+
+ANIME_PROMPT = """请用3-25个汉字描述这张图片的内容（动漫/插画/二次元）。
+
+要求：
+- **优先识别**作品名和角色名，格式为：《作品名》角色名 描述
+- 描述画面场景、动作、表情
+- 如果是同人图或特定画风，可以提及
+- **如果你认识角色，一定要标注名字**
+- **绝对不要编造作品名或角色名**，不确定就只描述画面""" + _RENAME_SUFFIX
+
+MODE_PROMPTS = {
+    "general": ("通用描述", GENERAL_PROMPT),
+    "portrait": ("人像聚焦", PORTRAIT_PROMPT),
+    "landscape": ("风景聚焦", LANDSCAPE_PROMPT),
+    "screenshot": ("截图识别", SCREENSHOT_PROMPT),
+    "food": ("美食聚焦", FOOD_PROMPT),
+    "anime": ("动漫二次元", ANIME_PROMPT),
+}
 
 # ========== 全局 LLM 实例 ==========
 _llm_instance: Optional[ChatOpenAI] = None
@@ -114,21 +169,52 @@ def encode_image(image_path: str, max_size: int = None) -> Optional[str]:
 
 def extract_timestamp(filename: str) -> Optional[str]:
     """
-    从文件名中提取日期时间，支持两种常见格式：
-    1. "屏幕截图 2026-04-11 005848"  （空格分隔，时间6位数字）
-    2. "Client-Win64-Shipping-2025-11-12-19-37-57-600.jpg" （短横线分隔，可选毫秒）
-    返回统一格式: "YYYY-MM-DD HHMMSS"
-    """
-    m1 = re.search(r'(\d{4}-\d{2}-\d{2})\s+(\d{6})', filename)
-    if m1:
-        return f"{m1.group(1)} {m1.group(2)}"
+    从文件名中提取日期时间，支持多种常见格式，返回统一格式 "YYYY-MM-DD HHMMSS"。
 
-    m2 = re.search(r'(\d{4}-\d{2}-\d{2})-(\d{2})-(\d{2})-(\d{2})(?:-\d+)?', filename)
-    if m2:
-        date_part = m2.group(1)
-        hour, minute, second = m2.group(2), m2.group(3), m2.group(4)
-        time_part = f"{hour}{minute}{second}"
-        return f"{date_part} {time_part}"
+    支持格式：
+    1. "屏幕截图 2026-04-11 005848"           — 空格分隔，时间6位
+    2. "20190124_105939"                       — YYYYMMDD_HHMMSS
+    3. "IMG_20190124_105939"                   — 前缀 + YYYYMMDD_HHMMSS
+    4. "20190124105939"                        — YYYYMMDDHHMMSS（14位连续）
+    5. "2025-11-12-19-37-57-600"              — 短横线分隔，可选毫秒
+    6. "2026-04-11_00-58-48"                  — 日期_时-分-秒
+    7. "Screenshot_20260411-005848"            — 前缀 + YYYYMMDD-HHMMSS
+    8. "2026.04.11 005848"                    — 点分隔日期
+    """
+    # 格式1: "2026-04-11 005848"
+    m = re.search(r'(\d{4}-\d{2}-\d{2})\s+(\d{6})', filename)
+    if m:
+        return f"{m.group(1)} {m.group(2)}"
+
+    # 格式2/3: "20190124_105939" 或 "IMG_20190124_105939"
+    m = re.search(r'(\d{4})(\d{2})(\d{2})[_-](\d{2})(\d{2})(\d{2})', filename)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}-{m.group(3)} {m.group(4)}{m.group(5)}{m.group(6)}"
+
+    # 格式4: "20190124105939"（14位连续数字）
+    m = re.search(r'(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})', filename)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}-{m.group(3)} {m.group(4)}{m.group(5)}{m.group(6)}"
+
+    # 格式5: "2025-11-12-19-37-57" 或 "2025-11-12-19-37-57-600"
+    m = re.search(r'(\d{4}-\d{2}-\d{2})-(\d{2})-(\d{2})-(\d{2})(?:-\d+)?', filename)
+    if m:
+        return f"{m.group(1)} {m.group(2)}{m.group(3)}{m.group(4)}"
+
+    # 格式6: "2026-04-11_00-58-48"
+    m = re.search(r'(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-(\d{2})', filename)
+    if m:
+        return f"{m.group(1)} {m.group(2)}{m.group(3)}{m.group(4)}"
+
+    # 格式7: "Screenshot_20260411-005848"
+    m = re.search(r'(\d{4})(\d{2})(\d{2})-(\d{6})', filename)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}-{m.group(3)} {m.group(4)}"
+
+    # 格式8: "2026.04.11 005848"
+    m = re.search(r'(\d{4})\.(\d{2})\.(\d{2})[\s_](\d{6})', filename)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}-{m.group(3)} {m.group(4)}"
 
     return None
 
@@ -145,10 +231,11 @@ def get_timestamp_key(filepath: Path) -> str:
 
 
 def generate_short_name(image_path: Path, model: str, original_stem: str,
-                        recent_descriptions: List[str]) -> Optional[str]:
+                        recent_descriptions: List[str], mode: str = "general") -> Optional[str]:
     """
     调用多模态模型生成中文短句。
     recent_descriptions: 最近生成的短句列表（用于上下文参考）
+    mode: 命名模式（general/portrait/landscape/screenshot/food/anime）
     """
     llm = get_shared_llm(model, temperature=0.5)
     img_base64 = encode_image(str(image_path))
@@ -161,7 +248,8 @@ def generate_short_name(image_path: Path, model: str, original_stem: str,
     else:
         desc_str = "（无）"
 
-    prompt = PROMPT.format(original_stem=original_stem, recent_descriptions=desc_str)
+    _, prompt_template = MODE_PROMPTS.get(mode, MODE_PROMPTS["general"])
+    prompt = prompt_template.format(original_stem=original_stem, recent_descriptions=desc_str)
 
     msg = HumanMessage(content=[
         {"type": "text", "text": prompt},
@@ -230,14 +318,15 @@ def safe_rename(old_path: Path, new_stem: str) -> bool:
 
 
 def process_one_image(img_path: Path, model: str, dry_run: bool,
-                      recent_history: deque) -> tuple:
+                      recent_history: deque, keep_original: bool = False,
+                      mode: str = "general") -> tuple:
     print(f"📷 处理: {img_path.name}")
     try:
         original_stem = img_path.stem
         # 获取最近的历史描述（线程安全）
         recent_list = get_recent_descriptions(recent_history)
 
-        short_name = generate_short_name(img_path, model, original_stem, recent_list)
+        short_name = generate_short_name(img_path, model, original_stem, recent_list, mode)
         if short_name is None:
             print(f"   ⚠️ 短句生成失败，保留原文件名")
             return img_path.name, "生成失败(保留原名)"
@@ -247,10 +336,9 @@ def process_one_image(img_path: Path, model: str, dry_run: bool,
         # 记录到历史（即使重命名失败也记录，用于后续上下文）
         add_recent_description(recent_history, short_name)
 
-        # 提取并保留时间戳
-        timestamp = extract_timestamp(original_stem)
-        if timestamp:
-            new_stem = f"{short_name} {timestamp}"
+        # 拼接：描述 + 原始文件名
+        if keep_original:
+            new_stem = f"{short_name} {original_stem}"
         else:
             new_stem = short_name
 
@@ -279,7 +367,12 @@ def main():
     parser.add_argument("--workers", "-w", type=int, default=4, help="并行线程数")
     parser.add_argument("--dry_run", action="store_true", help="仅模拟，不实际重命名")
     parser.add_argument("--screenshots_only", action="store_true",
-                        help="仅处理文件名包含“屏幕截图”的图片（例如微信/系统截图）")
+                        help='仅处理文件名包含"屏幕截图"的图片（例如微信/系统截图）')
+    parser.add_argument("--keep_original", "-k", action="store_true",
+                        help="保留原始文件名，附加在描述后面")
+    parser.add_argument("--mode", default="general",
+                        choices=list(MODE_PROMPTS.keys()),
+                        help="命名模式：general(通用) portrait(人像) landscape(风景) screenshot(截图) food(美食) anime(动漫)")
     args = parser.parse_args()
 
     input_dir = Path(args.input_dir)
@@ -315,7 +408,7 @@ def main():
     _stop_flag.clear()
     with tqdm(total=len(images), desc="处理进度", unit="张") as pbar:
         with ThreadPoolExecutor(max_workers=args.workers) as executor:
-            futures = {executor.submit(process_one_image, img, args.model, args.dry_run, recent_history): img
+            futures = {executor.submit(process_one_image, img, args.model, args.dry_run, recent_history, args.keep_original, args.mode): img
                        for img in images}
             for future in as_completed(futures):
                 if _stop_flag.is_set():
