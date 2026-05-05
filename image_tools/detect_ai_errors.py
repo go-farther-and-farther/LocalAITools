@@ -285,11 +285,11 @@ def restore_original_name(image_path: Path) -> Path:
     return image_path
 
 
-def detect_image_quality(image_path: Path, mode: str = "ai", custom_prompt: str = "", model: str = None) -> Tuple[Optional[float], Optional[str], str]:
+def detect_image_quality(image_path: Path, mode: str = "ai", custom_prompt: str = "", model: str = None, max_size: int = None) -> Tuple[Optional[float], Optional[str], str]:
     prompt = custom_prompt.strip() if custom_prompt.strip() else _get_prompt(mode)
     for attempt in range(1, config.RETRY_TIMES + 1):
         try:
-            base64_img = encode_image(image_path)
+            base64_img = encode_image(image_path, max_size=max_size)
             message = HumanMessage(content=[
                 {"type": "text", "text": prompt},
                 {
@@ -462,7 +462,7 @@ def move_single_to_category(img_path: str, category: str, target_dir: str) -> di
 
 
 def score_images(target_dir: str, mode: str = "ai", progress_callback=None,
-                 custom_prompt: str = "", model: str = None):
+                 custom_prompt: str = "", model: str = None, max_size: int = None):
     """仅评分，不分类。为每张图片生成 .txt 评分文件"""
     dir_path = Path(target_dir)
     if not dir_path.is_dir():
@@ -500,7 +500,7 @@ def score_images(target_dir: str, mode: str = "ai", progress_callback=None,
     completed = 0
     _stop_flag.clear()
     with ThreadPoolExecutor(max_workers=config.DEFAULT_WORKERS) as executor:
-        future_to_path = {executor.submit(detect_image_quality, img, mode, custom_prompt, model): img for img in image_files}
+        future_to_path = {executor.submit(detect_image_quality, img, mode, custom_prompt, model, max_size): img for img in image_files}
         with tqdm(total=total, desc="处理进度") as pbar:
             for future in as_completed(future_to_path):
                 if _stop_flag.is_set():
