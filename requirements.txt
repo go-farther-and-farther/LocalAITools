@@ -2,6 +2,9 @@ langchain-openai
 langchain-core
 langchain-community
 langchain-huggingface
+langchain-text-splitters
+sentence-transformers
+openai
 tqdm
 pillow
 numpy
