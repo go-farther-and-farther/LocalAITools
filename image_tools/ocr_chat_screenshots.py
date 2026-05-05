@@ -65,7 +65,9 @@ EXTRACT_PROMPT = """你是一个聊天记录整理助手。我将按从上到下
 请输出识别结果："""
 
 
-def encode_image_to_base64(pil_image: Image.Image, max_size: int = 2048) -> str:
+def encode_image_to_base64(pil_image: Image.Image, max_size: int = None) -> str:
+    if max_size is None:
+        max_size = config.IMAGE_MAX_SIZE
     """将 PIL 图片转为 base64 JPEG，处理 RGBA 模式，自动压缩大图"""
     import io
     w, h = pil_image.size

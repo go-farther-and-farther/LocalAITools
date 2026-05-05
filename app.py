@@ -6,6 +6,7 @@ LocalAITools - Gradio Web 界面
 然后浏览器打开 http://localhost:7860
 """
 
+import os
 import sys
 import io
 import logging
@@ -48,7 +49,8 @@ def _capture_log(fn, *args, **kwargs):
 # ============================================================
 # Tab 1: 图片重命名
 # ============================================================
-def _rename_images(input_dir, model, workers, dry_run, progress=gr.Progress()):
+def _rename_images(input_dir, model, workers, dry_run, thinking=True, progress=gr.Progress()):
+    os.environ["ENABLE_THINKING"] = "true" if thinking else "false"
     from image_tools.rename_images import process_one_image, get_shared_llm
     from collections import deque
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -103,7 +105,8 @@ def _rename_images(input_dir, model, workers, dry_run, progress=gr.Progress()):
 # ============================================================
 # Tab 2: 图片质量评分
 # ============================================================
-def _score_images(input_dir, mode, custom_prompt, model, progress=gr.Progress()):
+def _score_images(input_dir, mode, custom_prompt, model, thinking=True, progress=gr.Progress()):
+    os.environ["ENABLE_THINKING"] = "true" if thinking else "false"
     from image_tools.detect_ai_errors import score_images
 
     def on_progress(completed, total):
@@ -137,7 +140,8 @@ def _classify_images(input_dir, classify_method, top_percent, bottom_percent,
 # Tab 3: 聊天截图识别
 # ============================================================
 def _explain_images(input_dir, vision_model, temperature, workers, internal_workers, max_tokens,
-                    progress=gr.Progress()):
+                    thinking=True, progress=gr.Progress()):
+    os.environ["ENABLE_THINKING"] = "true" if thinking else "false"
     from image_tools.ocr_chat_screenshots import process_folder
 
     input_path = Path(input_dir)
@@ -174,7 +178,8 @@ def _explain_images(input_dir, vision_model, temperature, workers, internal_work
 # Tab 4: 聊天记录压缩
 # ============================================================
 def _compress_text(input_path, model, temperature, chunk_size, internal_workers, max_tokens,
-                   progress=gr.Progress()):
+                   thinking=True, progress=gr.Progress()):
+    os.environ["ENABLE_THINKING"] = "true" if thinking else "false"
     from text_tools.compress_chat import process_single_text_file, process_folder
 
     def on_progress(completed, total):
@@ -210,7 +215,8 @@ def _compress_text(input_path, model, temperature, chunk_size, internal_workers,
 # ============================================================
 # Tab 5: 文本翻译
 # ============================================================
-def _translate(input_file, output_file, model, batch_size, workers, progress=gr.Progress()):
+def _translate(input_file, output_file, model, batch_size, workers, thinking=True, progress=gr.Progress()):
+    os.environ["ENABLE_THINKING"] = "true" if thinking else "false"
     from text_tools.translate import translate_book_parallel
 
     if not Path(input_file).is_file():
@@ -242,7 +248,8 @@ def _translate(input_file, output_file, model, batch_size, workers, progress=gr.
 # ============================================================
 # Tab 6: 知识库问答
 # ============================================================
-def _query_kb(query, keyword, model, k, batch_size, progress=gr.Progress()):
+def _query_kb(query, keyword, model, k, batch_size, thinking=True, progress=gr.Progress()):
+    os.environ["ENABLE_THINKING"] = "true" if thinking else "false"
     from text_tools.chapter_summary import query_knowledge_base
 
     if not query.strip():
@@ -332,9 +339,6 @@ SETTINGS_SCHEMA = [
         ("OPENAI_BASE_URL", "API 地址", "http://localhost:1234/v1", "text"),
         ("OPENAI_API_KEY", "API 密钥", "lm-studio", "password"),
     ]),
-    ("🧠 推理设置", [
-        ("ENABLE_THINKING", "启用思考模式（Thinking）", "true", "bool"),
-    ]),
     ("🤖 模型名称", [
         ("VISION_MODEL", "视觉模型（图片识别、质量检测）", "qwen/qwen3.6-27b", "text"),
         ("VISION_MODEL_THINKING", "视觉模型-思考版（截图 OCR 推荐）", "qwen/qwen3.6-35b-a3b-Thinking", "text"),
@@ -349,6 +353,7 @@ SETTINGS_SCHEMA = [
         ("REQUEST_TIMEOUT_SHORT", "请求超时-短任务（秒）", "60", "int"),
     ]),
     ("🖼️ 图片处理", [
+        ("IMAGE_MAX_SIZE", "输入图片最大边长（像素）", "2048", "int"),
         ("SLICE_HEIGHT", "长截图切片高度（像素）", "2000", "int"),
         ("OVERLAP", "切片重叠高度（像素）", "400", "int"),
         ("TOP_PERCENT", "高质量比例（小数）", "0.05", "float"),
@@ -556,8 +561,8 @@ def _fetch_models(base_url, api_key):
     return categorized, msg
 
 
-def _make_model_selector(label, default_value, info=""):
-    """创建模型选择器组件（类型筛选 + 下拉选择 + 重新获取按钮）"""
+def _make_model_selector(label, default_value, info="", show_thinking=True):
+    """创建模型选择器组件（类型筛选 + 下拉选择 + 重新获取按钮 + 思考模式开关）"""
     with gr.Row():
         model_type = gr.Dropdown(
             choices=["全部模型", "chat 模型", "vlm 视觉模型", "embed 模型", "其他"],
@@ -574,8 +579,14 @@ def _make_model_selector(label, default_value, info=""):
         filterable=True,
         allow_custom_value=True,
     )
+    thinking_toggle = gr.Checkbox(
+        label="思考模式（Thinking）",
+        value=True,
+        visible=show_thinking,
+        info="开启后模型会先推理再回答，关闭可加快速度",
+    )
     fetch_status = gr.Textbox(visible=False, max_lines=1)
-    return model_type, model_select, fetch_btn, fetch_status
+    return model_type, model_select, fetch_btn, fetch_status, thinking_toggle
 
 
 def _bind_model_fetch(fetch_btn, model_type, model_select, fetch_status, provider_info, default_value):
@@ -899,264 +910,267 @@ ollama pull qwen3     # 下载模型
             # 每次切换到该 Tab 时刷新历史
             app.load(_load_history, outputs=[history_md])
 
-        # ==================== Tab 1: 图片重命名 ====================
-        with gr.Tab("🖼️ 图片重命名"):
-            gr.Markdown(_make_title("图片 AI 重命名 — 用中文短句替代杂乱的文件名"))
-            with gr.Accordion("📖 使用方法", open=False):
-                gr.Markdown("**步骤：** ① 把图片放进文件夹 → ② 点「开始重命名」→ ③ 文件名变成中文描述短语\n\n"
-                            "> 💡 建议先勾选「试运行」预览效果，满意后再取消勾选正式改名。")
-            with gr.Row():
-                with gr.Column(scale=2):
-                    rn_input = gr.Textbox(label="图片文件夹",
-                                          value=s["rename"].get("input_dir", str(config.DATA_DIR / "images")),
-                                          placeholder="粘贴图片所在文件夹的完整路径",
-                                          info="支持 .jpg / .jpeg / .png / .webp / .avif / .gif")
-                    with gr.Accordion("⚙️ 高级设置", open=False):
-                        rn_model_type, rn_model, rn_fetch_btn, rn_fetch_st = _make_model_selector(
-                            "视觉模型", s["rename"].get("model", config.RENAME_MODEL),
-                            "需要视觉模型，能理解图片内容")
-                        rn_workers = gr.Slider(1, 8, value=s["rename"].get("workers", config.DEFAULT_WORKERS), step=1,
-                                               label="并行线程数", info="越大越快，但可能触发 API 限流")
-                    rn_dry = gr.Checkbox(label="试运行（只预览不实际改名）", value=s["rename"].get("dry_run", False),
-                                         info="强烈建议第一次使用时先试运行，看看效果")
+        # ==================== Tab 1: 图片工具（重命名 + 评分分类 + 手动审核）====================
+        with gr.Tab("🖼️ 图片工具"):
+            with gr.Tabs():
+                # ---- 子 Tab: 图片重命名 ----
+                with gr.Tab("🏷️ 图片重命名"):
+                    gr.Markdown(_make_title("图片 AI 重命名 — 用中文短句替代杂乱的文件名"))
+                    with gr.Accordion("📖 使用方法", open=False):
+                        gr.Markdown("**步骤：** ① 把图片放进文件夹 → ② 点「开始重命名」→ ③ 文件名变成中文描述短语\n\n"
+                                    "> 💡 建议先勾选「试运行」预览效果，满意后再取消勾选正式改名。")
                     with gr.Row():
-                        rn_btn = gr.Button("开始重命名", variant="primary")
-                        rn_stop = gr.Button("停止", variant="stop")
-                with gr.Column(scale=3):
-                    rn_output = gr.Textbox(label="处理结果", lines=15, elem_classes="output-text",
-                                           placeholder="处理完成后这里会显示每张图片的新名字...")
-            rn_btn.click(_rename_images, [rn_input, rn_model, rn_workers, rn_dry], [rn_output])
-            def _stop_rename():
-                from image_tools.rename_images import request_stop
-                request_stop()
-                return "⏹️ 已请求停止..."
-            rn_stop.click(_stop_rename, outputs=[rn_output])
-            _bind_model_fetch(rn_fetch_btn, rn_model_type, rn_model, rn_fetch_st,
-                             provider_info, config.RENAME_MODEL)
+                        with gr.Column(scale=2):
+                            rn_input = gr.Textbox(label="图片文件夹",
+                                                  value=s["rename"].get("input_dir", str(config.DATA_DIR / "images")),
+                                                  placeholder="粘贴图片所在文件夹的完整路径",
+                                                  info="支持 .jpg / .jpeg / .png / .webp / .avif / .gif")
+                            with gr.Accordion("⚙️ 高级设置", open=False):
+                                rn_model_type, rn_model, rn_fetch_btn, rn_fetch_st, rn_thinking = _make_model_selector(
+                                    "视觉模型", s["rename"].get("model", config.RENAME_MODEL),
+                                    "需要视觉模型，能理解图片内容")
+                                rn_workers = gr.Slider(1, 8, value=s["rename"].get("workers", config.DEFAULT_WORKERS), step=1,
+                                                       label="并行线程数", info="越大越快，但可能触发 API 限流")
+                            rn_dry = gr.Checkbox(label="试运行（只预览不实际改名）", value=s["rename"].get("dry_run", False),
+                                                 info="强烈建议第一次使用时先试运行，看看效果")
+                            with gr.Row():
+                                rn_btn = gr.Button("开始重命名", variant="primary")
+                                rn_stop = gr.Button("停止", variant="stop")
+                        with gr.Column(scale=3):
+                            rn_output = gr.Textbox(label="处理结果", lines=15, elem_classes="output-text",
+                                                   placeholder="处理完成后这里会显示每张图片的新名字...")
+                    rn_btn.click(_rename_images, [rn_input, rn_model, rn_workers, rn_dry, rn_thinking], [rn_output])
+                    def _stop_rename():
+                        from image_tools.rename_images import request_stop
+                        request_stop()
+                        return "⏹️ 已请求停止..."
+                    rn_stop.click(_stop_rename, outputs=[rn_output])
+                    _bind_model_fetch(rn_fetch_btn, rn_model_type, rn_model, rn_fetch_st,
+                                     provider_info, config.RENAME_MODEL)
 
-        # ==================== Tab 2: 图片质量评分与分类 ====================
-        with gr.Tab("🔍 图片质量评分与分类"):
-            gr.Markdown(_make_title("AI 评分 + 自动分拣 — 多维度评估，高分/低分图片自动归类"))
-            with gr.Accordion("📖 使用方法", open=False):
-                gr.Markdown("**评分：** ① 选择检测模式 → ② 填文件夹路径 → ③ 点「开始评分」→ 每张图生成 `.txt` 评分文件\n\n"
-                            "**分类：** ④ 评分完成后点「开始分类」→ 优质图片移至 `HighQuality/`，劣质/错误图片移至 `LowQuality_Errors/`\n\n"
-                            "**七种检测模式：**\n"
-                            "- 🎨 **AI 图片错误检测** — 检测 AI 生成图的肢体错乱、面部畸形、结构崩坏等问题\n"
-                            "- 📸 **漫展摄影筛选** — 检测跑焦模糊、过曝欠曝等拍摄问题，筛选可出片的 Cosplay 照片\n"
-                            "- 🖼️ **通用照片质量** — 综合评估清晰度、曝光、构图、内容趣味性\n"
-                            "- 👤 **人像摄影评估** — 侧重面部清晰度、肤色、表情、虚化氛围\n"
-                            "- 🌄 **风景摄影评估** — 侧重光影层次、构图法则、色彩氛围\n"
-                            "- 📄 **文档扫描清晰度** — 评估文字可读性、光照均匀度、畸变、完整度\n"
-                            "- 🖌️ **绘画插图质量** — 评估造型比例、线条笔触、色彩光影、完成度\n\n"
-                            "> 💡 评分和分类是独立的两步，评完分可以先看分数再决定如何分类")
+                # ---- 子 Tab: 图片质量评分与分类 ----
+                with gr.Tab("🔍 评分与分类"):
+                    gr.Markdown(_make_title("AI 评分 + 自动分拣 — 多维度评估，高分/低分图片自动归类"))
+                    with gr.Accordion("📖 使用方法", open=False):
+                        gr.Markdown("**评分：** ① 选择检测模式 → ② 填文件夹路径 → ③ 点「开始评分」→ 每张图生成 `.txt` 评分文件\n\n"
+                                    "**分类：** ④ 评分完成后点「开始分类」→ 优质图片移至 `HighQuality/`，劣质/错误图片移至 `LowQuality_Errors/`\n\n"
+                                    "**七种检测模式：**\n"
+                                    "- 🎨 **AI 图片错误检测** — 检测 AI 生成图的肢体错乱、面部畸形、结构崩坏等问题\n"
+                                    "- 📸 **漫展摄影筛选** — 检测跑焦模糊、过曝欠曝等拍摄问题，筛选可出片的 Cosplay 照片\n"
+                                    "- 🖼️ **通用照片质量** — 综合评估清晰度、曝光、构图、内容趣味性\n"
+                                    "- 👤 **人像摄影评估** — 侧重面部清晰度、肤色、表情、虚化氛围\n"
+                                    "- 🌄 **风景摄影评估** — 侧重光影层次、构图法则、色彩氛围\n"
+                                    "- 📄 **文档扫描清晰度** — 评估文字可读性、光照均匀度、畸变、完整度\n"
+                                    "- 🖌️ **绘画插图质量** — 评估造型比例、线条笔触、色彩光影、完成度\n\n"
+                                    "> 💡 评分和分类是独立的两步，评完分可以先看分数再决定如何分类")
 
-            # ---- 评分区域 ----
-            gr.Markdown("### ① 评分")
-            with gr.Row():
-                with gr.Column(scale=2):
-                    de_mode = gr.Dropdown(
-                        label="检测模式",
-                        choices=[
-                            ("🎨 AI 图片错误检测", "ai"),
-                            ("📸 漫展摄影筛选", "photo"),
-                            ("🖼️ 通用照片质量", "general"),
-                            ("👤 人像摄影评估", "portrait"),
-                            ("🌄 风景摄影评估", "landscape"),
-                            ("📄 文档扫描清晰度", "document"),
-                            ("🖌️ 绘画插图质量", "art"),
-                        ],
-                        value=s["score"].get("mode", "ai"),
-                        info="AI错误：找肢体畸形/崩坏 | 摄影：找跑焦/过曝 | 通用：综合评估 | 人像/风景/文档/绘画各有侧重"
-                    )
-                    de_input = gr.Textbox(label="图片文件夹",
-                                          value=s["score"].get("input_dir", str(config.DATA_DIR / "images")),
-                                          placeholder="粘贴图片所在文件夹的完整路径",
-                                          info="评分结果保存为同名 .txt 文件")
-                    de_model_type, de_model, de_fetch_btn, de_fetch_st = _make_model_selector(
-                        "视觉模型", s["score"].get("model", config.VISION_MODEL),
-                        "需要视觉模型。留空使用设置页默认值")
-                    de_prompt = gr.Textbox(
-                        label="自定义评分提示词（留空使用默认）",
-                        value=s["score"].get("custom_prompt", ""),
-                        lines=6,
-                        placeholder="留空则使用当前模式的默认提示词。\n切换检测模式后请清空此框或重新填写对应模式的提示词。",
-                        info="留空 = 使用默认提示词"
-                    )
+                    # ---- 评分区域 ----
+                    gr.Markdown("### ① 评分")
                     with gr.Row():
-                        de_score_btn = gr.Button("开始评分", variant="primary")
-                        de_score_stop = gr.Button("停止", variant="stop")
-                with gr.Column(scale=3):
-                    de_score_output = gr.Textbox(label="评分日志", lines=15, elem_classes="output-text",
-                                                 placeholder="评分完成后这里会显示每张图的分数和理由...")
+                        with gr.Column(scale=2):
+                            de_mode = gr.Dropdown(
+                                label="检测模式",
+                                choices=[
+                                    ("🎨 AI 图片错误检测", "ai"),
+                                    ("📸 漫展摄影筛选", "photo"),
+                                    ("🖼️ 通用照片质量", "general"),
+                                    ("👤 人像摄影评估", "portrait"),
+                                    ("🌄 风景摄影评估", "landscape"),
+                                    ("📄 文档扫描清晰度", "document"),
+                                    ("🖌️ 绘画插图质量", "art"),
+                                ],
+                                value=s["score"].get("mode", "ai"),
+                                info="AI错误：找肢体畸形/崩坏 | 摄影：找跑焦/过曝 | 通用：综合评估 | 人像/风景/文档/绘画各有侧重"
+                            )
+                            de_input = gr.Textbox(label="图片文件夹",
+                                                  value=s["score"].get("input_dir", str(config.DATA_DIR / "images")),
+                                                  placeholder="粘贴图片所在文件夹的完整路径",
+                                                  info="评分结果保存为同名 .txt 文件")
+                            de_model_type, de_model, de_fetch_btn, de_fetch_st, de_thinking = _make_model_selector(
+                                "视觉模型", s["score"].get("model", config.VISION_MODEL),
+                                "需要视觉模型。留空使用设置页默认值")
+                            de_prompt = gr.Textbox(
+                                label="自定义评分提示词（留空使用默认）",
+                                value=s["score"].get("custom_prompt", ""),
+                                lines=6,
+                                placeholder="留空则使用当前模式的默认提示词。\n切换检测模式后请清空此框或重新填写对应模式的提示词。",
+                                info="留空 = 使用默认提示词"
+                            )
+                            with gr.Row():
+                                de_score_btn = gr.Button("开始评分", variant="primary")
+                                de_score_stop = gr.Button("停止", variant="stop")
+                        with gr.Column(scale=3):
+                            de_score_output = gr.Textbox(label="评分日志", lines=15, elem_classes="output-text",
+                                                         placeholder="评分完成后这里会显示每张图的分数和理由...")
 
-            # ---- 分类区域 ----
-            gr.Markdown("### ② 分类（根据已有评分结果）")
-            with gr.Row():
-                with gr.Column(scale=2):
-                    de_cls_method = gr.Radio(
-                        label="分类方式",
-                        choices=[("按比例（前/后 N%）", "percent"), ("按分值（≥N 分 或 <M 分）", "threshold")],
-                        value=s["score"].get("classify_method", "percent"),
-                        info="按比例：分数前N%入高分、后N%入低分 | 按分值：设定分数线"
-                    )
-                    with gr.Column():
-                        with gr.Row(visible=True) as de_percent_row:
-                            de_top = gr.Slider(1, 50, value=s["score"].get("top_percent", int(config.TOP_PERCENT * 100)), step=1,
-                                               label="高分比例（%）",
-                                               info="评分前 N% 的图片移入 HighQuality")
-                            de_bottom = gr.Slider(1, 50, value=s["score"].get("bottom_percent", int(config.BOTTOM_PERCENT * 100)), step=1,
-                                                  label="低分比例（%）",
-                                                  info="评分后 N% + 所有 ERR 图片移入 LowQuality_Errors")
-                        with gr.Row(visible=False) as de_threshold_row:
-                            de_min = gr.Slider(0.0, 10.0, value=s["score"].get("min_score", 7.0), step=0.1,
-                                               label="高分线（≥）",
-                                               info="分数 ≥ 此值的图片移入 HighQuality")
-                            de_max = gr.Slider(0.0, 10.0, value=s["score"].get("max_score", 4.0), step=0.1,
-                                               label="低分线（<）",
-                                               info="分数 < 此值的图片 + ERR 移入 LowQuality_Errors")
+                    # ---- 分类区域 ----
+                    gr.Markdown("### ② 分类（根据已有评分结果）")
                     with gr.Row():
-                        de_cls_btn = gr.Button("开始分类", variant="primary")
-                with gr.Column(scale=3):
-                    de_cls_output = gr.Textbox(label="分类日志", lines=12, elem_classes="output-text",
-                                               placeholder="分类完成后这里会显示移动结果...")
+                        with gr.Column(scale=2):
+                            de_cls_method = gr.Radio(
+                                label="分类方式",
+                                choices=[("按比例（前/后 N%）", "percent"), ("按分值（≥N 分 或 <M 分）", "threshold")],
+                                value=s["score"].get("classify_method", "percent"),
+                                info="按比例：分数前N%入高分、后N%入低分 | 按分值：设定分数线"
+                            )
+                            with gr.Column():
+                                with gr.Row(visible=True) as de_percent_row:
+                                    de_top = gr.Slider(1, 50, value=s["score"].get("top_percent", int(config.TOP_PERCENT * 100)), step=1,
+                                                       label="高分比例（%）",
+                                                       info="评分前 N% 的图片移入 HighQuality")
+                                    de_bottom = gr.Slider(1, 50, value=s["score"].get("bottom_percent", int(config.BOTTOM_PERCENT * 100)), step=1,
+                                                          label="低分比例（%）",
+                                                          info="评分后 N% + 所有 ERR 图片移入 LowQuality_Errors")
+                                with gr.Row(visible=False) as de_threshold_row:
+                                    de_min = gr.Slider(0.0, 10.0, value=s["score"].get("min_score", 7.0), step=0.1,
+                                                       label="高分线（≥）",
+                                                       info="分数 ≥ 此值的图片移入 HighQuality")
+                                    de_max = gr.Slider(0.0, 10.0, value=s["score"].get("max_score", 4.0), step=0.1,
+                                                       label="低分线（<）",
+                                                       info="分数 < 此值的图片 + ERR 移入 LowQuality_Errors")
+                            with gr.Row():
+                                de_cls_btn = gr.Button("开始分类", variant="primary")
+                        with gr.Column(scale=3):
+                            de_cls_output = gr.Textbox(label="分类日志", lines=12, elem_classes="output-text",
+                                                       placeholder="分类完成后这里会显示移动结果...")
 
-            # 显示/隐藏分类方式
-            def _toggle_cls_method(method):
-                if method == "percent":
-                    return gr.update(visible=True), gr.update(visible=False)
-                else:
-                    return gr.update(visible=False), gr.update(visible=True)
+                    # 显示/隐藏分类方式
+                    def _toggle_cls_method(method):
+                        if method == "percent":
+                            return gr.update(visible=True), gr.update(visible=False)
+                        else:
+                            return gr.update(visible=False), gr.update(visible=True)
 
-            de_cls_method.change(_toggle_cls_method, [de_cls_method], [de_percent_row, de_threshold_row])
+                    de_cls_method.change(_toggle_cls_method, [de_cls_method], [de_percent_row, de_threshold_row])
 
-            def _stop_scoring():
-                from image_tools.detect_ai_errors import request_stop
-                request_stop()
-                return "⏹️ 已请求停止..."
+                    def _stop_scoring():
+                        from image_tools.detect_ai_errors import request_stop
+                        request_stop()
+                        return "⏹️ 已请求停止..."
 
-            de_score_event = de_score_btn.click(_score_images, [de_input, de_mode, de_prompt, de_model], [de_score_output])
-            de_score_stop.click(_stop_scoring, outputs=[de_score_output])
-            de_cls_btn.click(_classify_images, [de_input, de_cls_method, de_top, de_bottom, de_min, de_max], [de_cls_output])
-            _bind_model_fetch(de_fetch_btn, de_model_type, de_model, de_fetch_st,
-                             provider_info, config.VISION_MODEL)
+                    de_score_event = de_score_btn.click(_score_images, [de_input, de_mode, de_prompt, de_model, de_thinking], [de_score_output])
+                    de_score_stop.click(_stop_scoring, outputs=[de_score_output])
+                    de_cls_btn.click(_classify_images, [de_input, de_cls_method, de_top, de_bottom, de_min, de_max], [de_cls_output])
+                    _bind_model_fetch(de_fetch_btn, de_model_type, de_model, de_fetch_st,
+                                     provider_info, config.VISION_MODEL)
 
-            # ---- 手动审核区域 ----
-            gr.Markdown("### ③ 手动审核（逐张查看评分并手动分类）")
-            gr.Markdown("加载评分结果后，逐张查看缩略图和点评，手动决定每张图片的分类。")
+                    # ---- 手动审核区域 ----
+                    gr.Markdown("### ③ 手动审核（逐张查看评分并手动分类）")
+                    gr.Markdown("加载评分结果后，逐张查看缩略图和点评，手动决定每张图片的分类。")
 
-            review_state = gr.State({"queue": [], "index": 0, "last_moved": None})
+                    review_state = gr.State({"queue": [], "index": 0, "last_moved": None})
 
-            with gr.Row():
-                with gr.Column(scale=2):
                     with gr.Row():
-                        review_input = gr.Textbox(
-                            label="图片文件夹（已完成评分的）",
-                            value=s["score"].get("input_dir", str(config.DATA_DIR / "images")),
-                            placeholder="与上方评分使用同一目录",
-                            scale=3
-                        )
-                        review_load_btn = gr.Button("📂 加载评分结果", variant="secondary", scale=1)
+                        with gr.Column(scale=2):
+                            with gr.Row():
+                                review_input = gr.Textbox(
+                                    label="图片文件夹（已完成评分的）",
+                                    value=s["score"].get("input_dir", str(config.DATA_DIR / "images")),
+                                    placeholder="与上方评分使用同一目录",
+                                    scale=3
+                                )
+                                review_load_btn = gr.Button("📂 加载评分结果", variant="secondary", scale=1)
 
-                    review_image = gr.Image(label="当前图片", height=420, show_label=True,
-                                            elem_classes="output-text")
-                    with gr.Row():
-                        review_progress = gr.Textbox(label="进度", value="未加载", interactive=False, scale=1)
+                            review_image = gr.Image(label="当前图片", height=420, show_label=True,
+                                                    elem_classes="output-text")
+                            with gr.Row():
+                                review_progress = gr.Textbox(label="进度", value="未加载", interactive=False, scale=1)
 
-                with gr.Column(scale=1):
-                    review_info = gr.Markdown("等待加载评分结果...", elem_classes="output-text")
-                    with gr.Row():
-                        review_high_btn = gr.Button("✅ 高质量", variant="primary", size="lg")
-                        review_low_btn = gr.Button("❌ 低质量", variant="stop", size="lg")
-                    with gr.Row():
-                        review_skip_btn = gr.Button("⏭️ 跳过", variant="secondary")
-                        review_undo_btn = gr.Button("↩️ 撤销上一步", variant="secondary")
-                    review_log = gr.Textbox(label="操作日志", lines=4, interactive=False, elem_classes="output-text")
+                        with gr.Column(scale=1):
+                            review_info = gr.Markdown("等待加载评分结果...", elem_classes="output-text")
+                            with gr.Row():
+                                review_high_btn = gr.Button("✅ 高质量", variant="primary", size="lg")
+                                review_low_btn = gr.Button("❌ 低质量", variant="stop", size="lg")
+                            with gr.Row():
+                                review_skip_btn = gr.Button("⏭️ 跳过", variant="secondary")
+                                review_undo_btn = gr.Button("↩️ 撤销上一步", variant="secondary")
+                            review_log = gr.Textbox(label="操作日志", lines=4, interactive=False, elem_classes="output-text")
 
-            def _load_image_safe(path):
-                """安全加载图片为 numpy 数组，避免 Gradio 路径权限问题"""
-                from PIL import Image, ImageOps
-                img = Image.open(path)
-                try:
-                    img = ImageOps.exif_transpose(img)
-                except Exception:
-                    pass
-                import numpy as np
-                return np.array(img)
+                    def _load_image_safe(path):
+                        """安全加载图片为 numpy 数组，避免 Gradio 路径权限问题"""
+                        from PIL import Image, ImageOps
+                        img = Image.open(path)
+                        try:
+                            img = ImageOps.exif_transpose(img)
+                        except Exception:
+                            pass
+                        import numpy as np
+                        return np.array(img)
 
-            def _on_review_load(input_dir):
-                from image_tools.detect_ai_errors import load_review_queue
-                queue = load_review_queue(input_dir)
-                if not queue:
-                    return {}, None, "❌ 未找到评分文件（.txt），请先执行评分。", "0/0", "未找到评分文件"
-                item = queue[0]
-                info = _format_review_item(item)
-                progress = f"第 1/{len(queue)} 张"
-                log = f"✅ 已加载 {len(queue)} 张已评分图片"
-                return {"queue": queue, "index": 0, "last_moved": None}, _load_image_safe(item["path"]), info, progress, log
-
-            def _format_review_item(item):
-                if item["error"]:
-                    return f"### ❌ 错误图片\n\n**错误**: {item['error']}\n\n---"
-                score = item["score"]
-                emoji = "🟢" if score >= 7 else ("🟡" if score >= 5 else ("🟠" if score >= 3 else "🔴"))
-                return f"### {emoji} 评分: {score} 分\n\n**点评**: {item['reason']}\n\n---"
-
-            def _review_action(action, state, input_dir):
-                if not state or not state["queue"]:
-                    return state, None, "无图片可处理", "0/0", "请先加载评分结果"
-                queue = state["queue"]
-                idx = state["index"]
-                if idx >= len(queue):
-                    return state, None, "✅ 审核完成！所有图片已处理。", f"{len(queue)}/{len(queue)}", "审核完成"
-                item = queue[idx]
-                img_path = str(item["path"])
-                log = ""
-
-                if action == "undo":
-                    last = state.get("last_moved")
-                    if last:
-                        from image_tools.detect_ai_errors import move_single_to_category
-                        result = move_single_to_category(last["path"], "undo", input_dir)
-                        log = result["msg"]
+                    def _on_review_load(input_dir):
                         from image_tools.detect_ai_errors import load_review_queue
                         queue = load_review_queue(input_dir)
-                        idx = max(0, idx - 1)
-                    else:
-                        log = "没有可撤销的操作"
-                elif action == "skip":
-                    log = f"跳过: {Path(img_path).name}"
-                    idx += 1
-                else:
-                    from image_tools.detect_ai_errors import move_single_to_category
-                    result = move_single_to_category(img_path, action, input_dir)
-                    log = result["msg"]
-                    if result["ok"]:
-                        state["last_moved"] = {"path": img_path, "category": action}
-                        idx += 1
+                        if not queue:
+                            return {}, None, "❌ 未找到评分文件（.txt），请先执行评分。", "0/0", "未找到评分文件"
+                        item = queue[0]
+                        info = _format_review_item(item)
+                        progress = f"第 1/{len(queue)} 张"
+                        log = f"✅ 已加载 {len(queue)} 张已评分图片"
+                        return {"queue": queue, "index": 0, "last_moved": None}, _load_image_safe(item["path"]), info, progress, log
 
-                if idx >= len(queue):
-                    return state, None, "✅ 审核完成！", f"{len(queue)}/{len(queue)}", log
+                    def _format_review_item(item):
+                        if item["error"]:
+                            return f"### ❌ 错误图片\n\n**错误**: {item['error']}\n\n---"
+                        score = item["score"]
+                        emoji = "🟢" if score >= 7 else ("🟡" if score >= 5 else ("🟠" if score >= 3 else "🔴"))
+                        return f"### {emoji} 评分: {score} 分\n\n**点评**: {item['reason']}\n\n---"
 
-                next_item = queue[idx]
-                info = _format_review_item(next_item)
-                progress = f"第 {idx+1}/{len(queue)} 张"
-                return {"queue": queue, "index": idx, "last_moved": state.get("last_moved")}, _load_image_safe(next_item["path"]), info, progress, log
+                    def _review_action(action, state, input_dir):
+                        if not state or not state["queue"]:
+                            return state, None, "无图片可处理", "0/0", "请先加载评分结果"
+                        queue = state["queue"]
+                        idx = state["index"]
+                        if idx >= len(queue):
+                            return state, None, "✅ 审核完成！所有图片已处理。", f"{len(queue)}/{len(queue)}", "审核完成"
+                        item = queue[idx]
+                        img_path = str(item["path"])
+                        log = ""
 
-            review_load_btn.click(_on_review_load, [review_input],
-                                  [review_state, review_image, review_info, review_progress, review_log])
+                        if action == "undo":
+                            last = state.get("last_moved")
+                            if last:
+                                from image_tools.detect_ai_errors import move_single_to_category
+                                result = move_single_to_category(last["path"], "undo", input_dir)
+                                log = result["msg"]
+                                from image_tools.detect_ai_errors import load_review_queue
+                                queue = load_review_queue(input_dir)
+                                idx = max(0, idx - 1)
+                            else:
+                                log = "没有可撤销的操作"
+                        elif action == "skip":
+                            log = f"跳过: {Path(img_path).name}"
+                            idx += 1
+                        else:
+                            from image_tools.detect_ai_errors import move_single_to_category
+                            result = move_single_to_category(img_path, action, input_dir)
+                            log = result["msg"]
+                            if result["ok"]:
+                                state["last_moved"] = {"path": img_path, "category": action}
+                                idx += 1
 
-            review_high_btn.click(lambda s, d: _review_action("high", s, d),
-                                  [review_state, review_input],
-                                  [review_state, review_image, review_info, review_progress, review_log])
-            review_low_btn.click(lambda s, d: _review_action("low", s, d),
-                                 [review_state, review_input],
-                                 [review_state, review_image, review_info, review_progress, review_log])
-            review_skip_btn.click(lambda s, d: _review_action("skip", s, d),
-                                  [review_state, review_input],
-                                  [review_state, review_image, review_info, review_progress, review_log])
-            review_undo_btn.click(lambda s, d: _review_action("undo", s, d),
-                                  [review_state, review_input],
-                                  [review_state, review_image, review_info, review_progress, review_log])
+                        if idx >= len(queue):
+                            return state, None, "✅ 审核完成！", f"{len(queue)}/{len(queue)}", log
+
+                        next_item = queue[idx]
+                        info = _format_review_item(next_item)
+                        progress = f"第 {idx+1}/{len(queue)} 张"
+                        return {"queue": queue, "index": idx, "last_moved": state.get("last_moved")}, _load_image_safe(next_item["path"]), info, progress, log
+
+                    review_load_btn.click(_on_review_load, [review_input],
+                                          [review_state, review_image, review_info, review_progress, review_log])
+
+                    review_high_btn.click(lambda s, d: _review_action("high", s, d),
+                                          [review_state, review_input],
+                                          [review_state, review_image, review_info, review_progress, review_log])
+                    review_low_btn.click(lambda s, d: _review_action("low", s, d),
+                                         [review_state, review_input],
+                                         [review_state, review_image, review_info, review_progress, review_log])
+                    review_skip_btn.click(lambda s, d: _review_action("skip", s, d),
+                                          [review_state, review_input],
+                                          [review_state, review_image, review_info, review_progress, review_log])
+                    review_undo_btn.click(lambda s, d: _review_action("undo", s, d),
+                                          [review_state, review_input],
+                                          [review_state, review_image, review_info, review_progress, review_log])
 
         # ==================== Tab 3: 聊天截图识别 ====================
         with gr.Tab("💬 聊天截图识别"):
@@ -1172,7 +1186,7 @@ ollama pull qwen3     # 下载模型
                                           placeholder="粘贴聊天截图所在文件夹的完整路径",
                                           info="支持 .jpg / .jpeg / .png / .bmp / .webp")
                     with gr.Accordion("⚙️ 高级设置", open=False):
-                        ei_model_type, ei_model, ei_fetch_btn, ei_fetch_st = _make_model_selector(
+                        ei_model_type, ei_model, ei_fetch_btn, ei_fetch_st, ei_thinking = _make_model_selector(
                             "视觉模型", s["ocr"].get("model", config.VISION_MODEL_THINKING),
                             "需要视觉模型，推荐带 Thinking 能力的模型")
                         ei_temp = gr.Slider(0.0, 1.0, value=s["ocr"].get("temperature", 0.3), step=0.1, label="温度",
@@ -1189,7 +1203,7 @@ ollama pull qwen3     # 下载模型
                 with gr.Column(scale=3):
                     ei_output = gr.Textbox(label="处理日志", lines=15, elem_classes="output-text",
                                            placeholder="处理完成后这里会显示识别进度和结果...")
-            ei_btn.click(_explain_images, [ei_input, ei_model, ei_temp, ei_workers, ei_iworkers, ei_maxtok], [ei_output])
+            ei_btn.click(_explain_images, [ei_input, ei_model, ei_temp, ei_workers, ei_iworkers, ei_maxtok, ei_thinking], [ei_output])
             def _stop_ocr():
                 from image_tools.ocr_chat_screenshots import request_stop
                 request_stop()
@@ -1198,87 +1212,90 @@ ollama pull qwen3     # 下载模型
             _bind_model_fetch(ei_fetch_btn, ei_model_type, ei_model, ei_fetch_st,
                              provider_info, config.VISION_MODEL_THINKING)
 
-        # ==================== Tab 4: 聊天记录压缩 ====================
-        with gr.Tab("📝 聊天记录压缩"):
-            gr.Markdown(_make_title("聊天记录 txt 文件 → 精简格式化"))
-            with gr.Accordion("📖 使用方法", open=False):
-                gr.Markdown("**步骤：** ① 把截图 OCR 生成的 TXT（或任意聊天记录 TXT）放进文件夹 → ② 点「开始压缩」→ ③ 得到 `.compressed.txt` 文件\n\n"
-                            "> 💡 压缩会合并连续相同说话人的时间戳，移除系统消息等冗余内容，保留所有对话实质\n"
-                            "> 📎 **典型流程：** 截图 → Tab 3 识别 → 本 Tab 压缩 → 得到干净对话文本")
-            with gr.Row():
-                with gr.Column(scale=2):
-                    ct_input = gr.Textbox(label="输入文件/文件夹",
-                                          value=s["compress"].get("input_path", str(config.DATA_DIR / "screenshots" / "texts")),
-                                          placeholder="粘贴聊天记录 TXT 文件或文件夹路径",
-                                          info="可以是单个 .txt 文件，也可以是装多个 .txt 的文件夹")
-                    with gr.Accordion("⚙️ 高级设置", open=False):
-                        ct_model_type, ct_model, ct_fetch_btn, ct_fetch_st = _make_model_selector(
-                            "文本模型", s["compress"].get("model", config.VISION_MODEL_THINKING),
-                            "纯文本任务，用普通文本模型即可，不必用视觉模型")
-                        ct_temp = gr.Slider(0.0, 0.5, value=s["compress"].get("temperature", 0.2), step=0.05, label="温度",
-                                            info="精简任务建议低温 0.1-0.3，保持稳定")
-                        ct_chunk = gr.Slider(5000, 50000, value=s["compress"].get("chunk_size", config.DEFAULT_CHUNK_SIZE), step=1000,
-                                             label="分块大小（字符）",
-                                             info="每块给 LLM 处理的文字量。越大单次成本越高，但分段更连贯")
-                        ct_iw = gr.Slider(1, 4, value=s["compress"].get("internal_workers", 2), step=1, label="内部并发数",
-                                          info="同时处理几块文本")
-                        ct_maxtok = gr.Slider(1000, 8000, value=s["compress"].get("max_tokens", 4000), step=500, label="最大 Token 数",
-                                              info="输出长度上限")
+        # ==================== Tab 4: 文本工具（聊天压缩 + 翻译）====================
+        with gr.Tab("📝 文本工具"):
+            with gr.Tabs():
+                # ---- 子 Tab: 聊天记录压缩 ----
+                with gr.Tab("📄 聊天记录压缩"):
+                    gr.Markdown(_make_title("聊天记录 txt 文件 → 精简格式化"))
+                    with gr.Accordion("📖 使用方法", open=False):
+                        gr.Markdown("**步骤：** ① 把截图 OCR 生成的 TXT（或任意聊天记录 TXT）放进文件夹 → ② 点「开始压缩」→ ③ 得到 `.compressed.txt` 文件\n\n"
+                                    "> 💡 压缩会合并连续相同说话人的时间戳，移除系统消息等冗余内容，保留所有对话实质\n"
+                                    "> 📎 **典型流程：** 截图 → 截图识别 → 本功能压缩 → 得到干净对话文本")
                     with gr.Row():
-                        ct_btn = gr.Button("开始压缩", variant="primary")
-                        ct_stop = gr.Button("停止", variant="stop")
-                with gr.Column(scale=3):
-                    ct_output = gr.Textbox(label="处理日志", lines=15, elem_classes="output-text",
-                                           placeholder="处理完成后这里会显示压缩进度...")
-            ct_btn.click(_compress_text, [ct_input, ct_model, ct_temp, ct_chunk, ct_iw, ct_maxtok], [ct_output])
-            def _stop_compress():
-                from text_tools.compress_chat import request_stop
-                request_stop()
-                return "⏹️ 已请求停止..."
-            ct_stop.click(_stop_compress, outputs=[ct_output])
-            _bind_model_fetch(ct_fetch_btn, ct_model_type, ct_model, ct_fetch_st,
-                             provider_info, config.VISION_MODEL_THINKING)
+                        with gr.Column(scale=2):
+                            ct_input = gr.Textbox(label="输入文件/文件夹",
+                                                  value=s["compress"].get("input_path", str(config.DATA_DIR / "screenshots" / "texts")),
+                                                  placeholder="粘贴聊天记录 TXT 文件或文件夹路径",
+                                                  info="可以是单个 .txt 文件，也可以是装多个 .txt 的文件夹")
+                            with gr.Accordion("⚙️ 高级设置", open=False):
+                                ct_model_type, ct_model, ct_fetch_btn, ct_fetch_st, ct_thinking = _make_model_selector(
+                                    "文本模型", s["compress"].get("model", config.VISION_MODEL_THINKING),
+                                    "纯文本任务，用普通文本模型即可，不必用视觉模型")
+                                ct_temp = gr.Slider(0.0, 0.5, value=s["compress"].get("temperature", 0.2), step=0.05, label="温度",
+                                                    info="精简任务建议低温 0.1-0.3，保持稳定")
+                                ct_chunk = gr.Slider(5000, 50000, value=s["compress"].get("chunk_size", config.DEFAULT_CHUNK_SIZE), step=1000,
+                                                     label="分块大小（字符）",
+                                                     info="每块给 LLM 处理的文字量。越大单次成本越高，但分段更连贯")
+                                ct_iw = gr.Slider(1, 4, value=s["compress"].get("internal_workers", 2), step=1, label="内部并发数",
+                                                  info="同时处理几块文本")
+                                ct_maxtok = gr.Slider(1000, 8000, value=s["compress"].get("max_tokens", 4000), step=500, label="最大 Token 数",
+                                                      info="输出长度上限")
+                            with gr.Row():
+                                ct_btn = gr.Button("开始压缩", variant="primary")
+                                ct_stop = gr.Button("停止", variant="stop")
+                        with gr.Column(scale=3):
+                            ct_output = gr.Textbox(label="处理日志", lines=15, elem_classes="output-text",
+                                                   placeholder="处理完成后这里会显示压缩进度...")
+                    ct_btn.click(_compress_text, [ct_input, ct_model, ct_temp, ct_chunk, ct_iw, ct_maxtok, ct_thinking], [ct_output])
+                    def _stop_compress():
+                        from text_tools.compress_chat import request_stop
+                        request_stop()
+                        return "⏹️ 已请求停止..."
+                    ct_stop.click(_stop_compress, outputs=[ct_output])
+                    _bind_model_fetch(ct_fetch_btn, ct_model_type, ct_model, ct_fetch_st,
+                                     provider_info, config.VISION_MODEL_THINKING)
 
-        # ==================== Tab 5: 文本翻译 ====================
-        with gr.Tab("🌐 文本翻译"):
-            gr.Markdown(_make_title("长篇文本翻译 — 按章节切分，断点续传"))
-            with gr.Accordion("📖 使用方法", open=False):
-                gr.Markdown("**步骤：** ① 把要翻译的文本文件路径填好 → ② 点「开始翻译」→ ③ 去 `outputs/translation/` 找译文\n\n"
-                            "> 💡 自动识别「第X章」「Chapter」等章节标记，按章节切分翻译\n"
-                            "> 💡 支持**断点续传**：中途中断后重新点开始，会接着上次进度继续\n"
-                            "> 💡 目标语言在 `.env` 中设置（默认 `English`）")
-            with gr.Row():
-                with gr.Column(scale=2):
-                    tr_input = gr.Textbox(label="输入文件",
-                                          value=s["translate"].get("input_file", str(config.DATA_DIR / "texts" / "input.txt")),
-                                          placeholder="粘贴要翻译的 .txt 文件完整路径",
-                                          info="文件编码需为 UTF-8")
-                    tr_output_file = gr.Textbox(label="输出文件",
-                                                value=s["translate"].get("output_file", ""),
-                                                placeholder="留空则自动保存到 outputs/translation/translation.txt",
-                                                info="指定译文保存路径，留空自动生成")
-                    with gr.Accordion("⚙️ 高级设置", open=False):
-                        tr_model_type, tr_model, tr_fetch_btn, tr_fetch_st = _make_model_selector(
-                            "文本模型", s["translate"].get("model", config.TEXT_MODEL),
-                            "纯文本翻译任务，使用文本模型")
-                        tr_batch = gr.Slider(1, 20, value=s["translate"].get("batch_size", 10), step=1, label="每批章节数",
-                                             info="每批同时翻译多少章。越大越快但可能超时")
-                        tr_workers = gr.Slider(1, 4, value=s["translate"].get("workers", 2), step=1, label="并行线程数",
-                                               info="同时运行几个翻译任务")
+                # ---- 子 Tab: 文本翻译 ----
+                with gr.Tab("🌐 文本翻译"):
+                    gr.Markdown(_make_title("长篇文本翻译 — 按章节切分，断点续传"))
+                    with gr.Accordion("📖 使用方法", open=False):
+                        gr.Markdown("**步骤：** ① 把要翻译的文本文件路径填好 → ② 点「开始翻译」→ ③ 去 `outputs/translation/` 找译文\n\n"
+                                    "> 💡 自动识别「第X章」「Chapter」等章节标记，按章节切分翻译\n"
+                                    "> 💡 支持**断点续传**：中途中断后重新点开始，会接着上次进度继续\n"
+                                    "> 💡 目标语言在 `.env` 中设置（默认 `English`）")
                     with gr.Row():
-                        tr_btn = gr.Button("开始翻译", variant="primary")
-                        tr_stop = gr.Button("停止", variant="stop")
-                with gr.Column(scale=3):
-                    tr_output = gr.Textbox(label="翻译日志", lines=15, elem_classes="output-text",
-                                           placeholder="处理完成后这里会显示翻译进度、已翻章节数...")
-            tr_btn.click(_translate, [tr_input, tr_output_file, tr_model, tr_batch, tr_workers], [tr_output])
-            def _stop_translate():
-                from text_tools.translate import request_stop
-                request_stop()
-                return "⏹️ 已请求停止..."
-            tr_stop.click(_stop_translate, outputs=[tr_output])
-            _bind_model_fetch(tr_fetch_btn, tr_model_type, tr_model, tr_fetch_st,
-                             provider_info, config.TEXT_MODEL)
+                        with gr.Column(scale=2):
+                            tr_input = gr.Textbox(label="输入文件",
+                                                  value=s["translate"].get("input_file", str(config.DATA_DIR / "texts" / "input.txt")),
+                                                  placeholder="粘贴要翻译的 .txt 文件完整路径",
+                                                  info="文件编码需为 UTF-8")
+                            tr_output_file = gr.Textbox(label="输出文件",
+                                                        value=s["translate"].get("output_file", ""),
+                                                        placeholder="留空则自动保存到 outputs/translation/translation.txt",
+                                                        info="指定译文保存路径，留空自动生成")
+                            with gr.Accordion("⚙️ 高级设置", open=False):
+                                tr_model_type, tr_model, tr_fetch_btn, tr_fetch_st, tr_thinking = _make_model_selector(
+                                    "文本模型", s["translate"].get("model", config.TEXT_MODEL),
+                                    "纯文本翻译任务，使用文本模型")
+                                tr_batch = gr.Slider(1, 20, value=s["translate"].get("batch_size", 10), step=1, label="每批章节数",
+                                                     info="每批同时翻译多少章。越大越快但可能超时")
+                                tr_workers = gr.Slider(1, 4, value=s["translate"].get("workers", 2), step=1, label="并行线程数",
+                                                       info="同时运行几个翻译任务")
+                            with gr.Row():
+                                tr_btn = gr.Button("开始翻译", variant="primary")
+                                tr_stop = gr.Button("停止", variant="stop")
+                        with gr.Column(scale=3):
+                            tr_output = gr.Textbox(label="翻译日志", lines=15, elem_classes="output-text",
+                                                   placeholder="处理完成后这里会显示翻译进度、已翻章节数...")
+                    tr_btn.click(_translate, [tr_input, tr_output_file, tr_model, tr_batch, tr_workers, tr_thinking], [tr_output])
+                    def _stop_translate():
+                        from text_tools.translate import request_stop
+                        request_stop()
+                        return "⏹️ 已请求停止..."
+                    tr_stop.click(_stop_translate, outputs=[tr_output])
+                    _bind_model_fetch(tr_fetch_btn, tr_model_type, tr_model, tr_fetch_st,
+                                     provider_info, config.TEXT_MODEL)
 
         # ==================== Tab 6: 知识库问答 ====================
         with gr.Tab("📚 知识库问答"):
@@ -1300,7 +1317,7 @@ ollama pull qwen3     # 下载模型
                                             value="",
                                             info="过滤掉不包含该关键词的段落，能显著提高答案精度")
                     with gr.Accordion("⚙️ 高级设置", open=False):
-                        kb_model_type, kb_model, kb_fetch_btn, kb_fetch_st = _make_model_selector(
+                        kb_model_type, kb_model, kb_fetch_btn, kb_fetch_st, kb_thinking = _make_model_selector(
                             "文本模型", config.TEXT_MODEL,
                             "用于最终回答生成的文本模型")
                         kb_k = gr.Slider(10, 200, value=50, step=10, label="检索片段数",
@@ -1313,7 +1330,7 @@ ollama pull qwen3     # 下载模型
                 with gr.Column(scale=3):
                     kb_output = gr.Textbox(label="回答结果", lines=18, elem_classes="output-text",
                                            placeholder="查询结果会显示在这里，包括进度和最终答案...")
-            kb_btn.click(_query_kb, [kb_query, kb_keyword, kb_model, kb_k, kb_batch], [kb_output])
+            kb_btn.click(_query_kb, [kb_query, kb_keyword, kb_model, kb_k, kb_batch, kb_thinking], [kb_output])
             def _stop_kb():
                 from text_tools.chapter_summary import request_stop
                 request_stop()
@@ -1339,9 +1356,9 @@ ollama pull qwen3     # 下载模型
                     gr.Markdown("### 连接配置")
                     bm_url = gr.Textbox(label="API Base URL", value=s["benchmark"].get("url", config.OPENAI_BASE_URL),
                                         info="被测 API 地址，如 http://localhost:1234/v1")
-                    bm_model_type, bm_model, bm_fetch_btn, bm_fetch_st = _make_model_selector(
+                    bm_model_type, bm_model, bm_fetch_btn, bm_fetch_st, bm_thinking = _make_model_selector(
                         "被测模型", s["benchmark"].get("model", config.BENCHMARK_MODEL),
-                        "被测模型，需与 API 中实际名称一致")
+                        "被测模型，需与 API 中实际名称一致", show_thinking=False)
                     bm_key = gr.Textbox(label="API Key", value=s["benchmark"].get("api_key", config.OPENAI_API_KEY), type="password",
                                         info="本地服务如 LM Studio 填任意值即可")
                     gr.Markdown("### 测试参数")
@@ -1380,32 +1397,41 @@ ollama pull qwen3     # 下载模型
             current_env = _read_env()
             setting_inputs: dict = {}
 
-            with gr.Column():
-                for section_name, fields in SETTINGS_SCHEMA:
-                    with gr.Accordion(section_name, open=False):
-                        for key, label, default_val, kind in fields:
-                            cur_val = current_env.get(key, default_val)
-                            if kind == "password":
-                                inp = gr.Textbox(label=label, value=cur_val, type="password")
-                            elif kind == "bool":
-                                bool_default = cur_val.lower() == "true"
-                                if key == "ENABLE_THINKING":
-                                    bool_info = "True = 模型先思考再回答（适合复杂任务）；False = 直接输出（更快，适合简单任务）"
-                                else:
-                                    bool_info = "True = 启动时自动 git pull 检查更新；False = 仅手动更新"
-                                inp = gr.Dropdown(
-                                    label=label, value=str(bool_default),
-                                    choices=["True", "False"],
-                                    info=bool_info
-                                )
-                            elif kind in ("int", "float"):
-                                inp = gr.Textbox(label=label, value=str(cur_val), placeholder=default_val)
-                            else:
-                                inp = gr.Textbox(label=label, value=cur_val, placeholder=default_val)
-                            setting_inputs[key] = inp
+            # 两列布局：左列（API/模型/并发），右列（图片/文本/更新/目录）
+            _LEFT_SECTIONS = {"🔗 API 连接", "🤖 模型名称", "⚡ 并发与超时"}
 
-                save_btn = gr.Button("💾 保存设置", variant="primary", scale=0)
-                save_msg = gr.Textbox(label="", interactive=False, container=False, show_label=False)
+            def _render_field(key, label, default_val, kind):
+                cur_val = current_env.get(key, default_val)
+                if kind == "password":
+                    return gr.Textbox(label=label, value=cur_val, type="password")
+                elif kind == "bool":
+                    bool_default = cur_val.lower() == "true"
+                    return gr.Dropdown(
+                        label=label, value=str(bool_default),
+                        choices=["True", "False"],
+                        info="True = 启动时自动 git pull 检查更新；False = 仅手动更新"
+                    )
+                elif kind in ("int", "float"):
+                    return gr.Textbox(label=label, value=str(cur_val), placeholder=default_val)
+                else:
+                    return gr.Textbox(label=label, value=cur_val, placeholder=default_val)
+
+            with gr.Row():
+                with gr.Column():
+                    for section_name, fields in SETTINGS_SCHEMA:
+                        if section_name in _LEFT_SECTIONS:
+                            with gr.Accordion(section_name, open=False):
+                                for key, label, default_val, kind in fields:
+                                    setting_inputs[key] = _render_field(key, label, default_val, kind)
+                with gr.Column():
+                    for section_name, fields in SETTINGS_SCHEMA:
+                        if section_name not in _LEFT_SECTIONS:
+                            with gr.Accordion(section_name, open=False):
+                                for key, label, default_val, kind in fields:
+                                    setting_inputs[key] = _render_field(key, label, default_val, kind)
+
+            save_btn = gr.Button("💾 保存设置", variant="primary", scale=0)
+            save_msg = gr.Textbox(label="", interactive=False, container=False, show_label=False)
 
             # 恢复默认设置
             gr.Markdown("---")
@@ -1442,9 +1468,9 @@ ollama pull qwen3     # 下载模型
                                        info="与上方「API 连接」分组中的地址保持一致")
                 test_key = gr.Textbox(label="API 密钥", value=config.OPENAI_API_KEY, type="password",
                                       info="本地服务填任意值即可")
-                test_model_type, test_model, test_fetch_btn, test_fetch_st = _make_model_selector(
+                test_model_type, test_model, test_fetch_btn, test_fetch_st, test_thinking = _make_model_selector(
                     "模型名称（可选）", config.VISION_MODEL,
-                    "测试时仅检查该模型是否在可用列表中，留空则只列出模型")
+                    "测试时仅检查该模型是否在可用列表中，留空则只列出模型", show_thinking=False)
                 test_btn = gr.Button("🔗 测试连接", variant="secondary")
                 test_msg = gr.Textbox(label="测试结果", interactive=False, lines=5, elem_classes="output-text",
                                       placeholder="测试结果会显示在这里...")

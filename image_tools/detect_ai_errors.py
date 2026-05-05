@@ -245,7 +245,9 @@ def get_mime_type(suffix: str) -> str:
     return mime_map.get(suffix.lower(), 'jpeg')
 
 
-def encode_image(image_path: Path, max_size: int = 2048) -> str:
+def encode_image(image_path: Path, max_size: int = None) -> str:
+    if max_size is None:
+        max_size = config.IMAGE_MAX_SIZE
     from PIL import Image, ImageOps
     img = Image.open(image_path)
     # 应用 EXIF 方向信息，防止 AI 看到旋转后图片而误判

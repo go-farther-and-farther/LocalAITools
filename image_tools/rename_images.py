@@ -60,9 +60,9 @@ _history_lock = threading.Lock()
 
 def get_shared_llm(model: str, temperature: float = 0.5) -> ChatOpenAI:
     global _llm_instance
-    if _llm_instance is None:
+    if _llm_instance is None or getattr(_llm_instance, 'model', None) != model:
         with _llm_lock:
-            if _llm_instance is None:
+            if _llm_instance is None or getattr(_llm_instance, 'model', None) != model:
                 _llm_instance = ChatOpenAI(
                     model=model,
                     temperature=temperature,
@@ -86,7 +86,9 @@ def add_recent_description(recent_queue: deque, description: str):
         recent_queue.append(description)
 
 
-def encode_image(image_path: str, max_size: int = 2048) -> Optional[str]:
+def encode_image(image_path: str, max_size: int = None) -> Optional[str]:
+    if max_size is None:
+        max_size = config.IMAGE_MAX_SIZE
     from PIL import Image, ImageOps
     try:
         img = Image.open(image_path)
@@ -100,7 +102,8 @@ def encode_image(image_path: str, max_size: int = 2048) -> Optional[str]:
             img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
         buf = io_module.BytesIO()
         fmt = img.format or 'JPEG'
-        if fmt.upper() == 'WEBP' and img.mode in ('RGBA', 'P'):
+        # JPEG/WebP 不支持透明通道，需转为 RGB
+        if img.mode in ('RGBA', 'P', 'LA') and fmt.upper() in ('JPEG', 'JPG', 'WEBP'):
             img = img.convert('RGB')
         img.save(buf, format=fmt)
         return base64.b64encode(buf.getvalue()).decode("utf-8")

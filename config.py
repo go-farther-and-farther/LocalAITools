@@ -38,6 +38,8 @@ REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "300"))
 REQUEST_TIMEOUT_SHORT = int(os.getenv("REQUEST_TIMEOUT_SHORT", "60"))
 
 # ==================== 图片处理参数 ====================
+# 输入图片最大边长（超过则等比缩小），降低 API 传输量和显存占用
+IMAGE_MAX_SIZE = int(os.getenv("IMAGE_MAX_SIZE", "2048"))
 # ocr_chat_screenshots 切片参数
 SLICE_HEIGHT = int(os.getenv("SLICE_HEIGHT", "2000"))
 OVERLAP = int(os.getenv("OVERLAP", "400"))
@@ -72,21 +74,17 @@ AUTO_UPDATE = os.getenv("AUTO_UPDATE", "false").lower() == "true"
 # 对不支持思考模式的模型，此选项无效（不会报错）。
 # 注意：每次调用 get_llm_extra_body() 时动态读取环境变量，
 # 确保修改 .env 后重新创建的 LLM 实例能生效。
-def get_llm_extra_body() -> dict:
+def get_llm_extra_body(enabled: bool = None) -> dict:
     """返回 ChatOpenAI 的 extra_body 参数，用于控制思考模式。
-    每次调用时重新读取环境变量（非缓存），确保设置变更后生效。"""
-    import os as _os
-    from dotenv import load_dotenv as _load_dotenv
-    _load_dotenv(override=True)
-    enabled = _os.getenv("ENABLE_THINKING", "true").lower() == "true"
+    enabled=True 强制开启，enabled=False 强制关闭，None 读取环境变量。"""
+    if enabled is None:
+        import os as _os
+        from dotenv import load_dotenv as _load_dotenv
+        _load_dotenv(override=True)
+        enabled = _os.getenv("ENABLE_THINKING", "true").lower() == "true"
     if not enabled:
-        return {
-            "thinking": False,
-            "enable_thinking": False,
-            "reasoning": False,
-            "think": False,       # llama.cpp / LM Studio 可能用这个键名
-        }
-    return {}
+        return {"enable_thinking": False}
+    return {"enable_thinking": True}
 
 # ==================== 目录路径 ====================
 # 项目根目录
