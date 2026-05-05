@@ -63,7 +63,7 @@ def _apply_provider(prov):
 # ============================================================
 # Tab 1: 图片重命名
 # ============================================================
-def _rename_images(input_dir, model, workers, dry_run, keep_original, mode, provider, thinking=True, progress=gr.Progress()):
+def _rename_images(input_dir, model, workers, dry_run, keep_original, mode, context_count, max_size, provider, thinking=True, progress=gr.Progress()):
     _apply_provider(provider)
     os.environ["ENABLE_THINKING"] = "true" if thinking else "false"
     from image_tools.rename_images import process_one_image, get_shared_llm
@@ -85,7 +85,8 @@ def _rename_images(input_dir, model, workers, dry_run, keep_original, mode, prov
         return "📂 未找到图片文件"
 
     get_shared_llm(model or config.RENAME_MODEL)
-    recent_history = deque(maxlen=5)
+    recent_history = deque(maxlen=max(1, context_count))
+    effective_max_size = max_size if max_size and max_size > 0 else None
     results = []
     total = len(images)
     completed = 0
@@ -93,7 +94,7 @@ def _rename_images(input_dir, model, workers, dry_run, keep_original, mode, prov
     from image_tools.rename_images import _stop_flag
     _stop_flag.clear()
     with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = {executor.submit(process_one_image, img, model or config.RENAME_MODEL, dry_run, recent_history, keep_original, mode): img
+        futures = {executor.submit(process_one_image, img, model or config.RENAME_MODEL, dry_run, recent_history, keep_original, mode, effective_max_size): img
                    for img in images}
         for i, future in enumerate(as_completed(futures)):
             if _stop_flag.is_set():
@@ -117,18 +118,29 @@ def _rename_images(input_dir, model, workers, dry_run, keep_original, mode, prov
     return result
 
 
+def _classify_by_work(input_dir, dry_run, min_count):
+    from image_tools.rename_images import classify_by_work
+    results = classify_by_work(input_dir, dry_run, min_count=int(min_count))
+    if not results:
+        return "📂 未找到可分类的图片"
+    prefix = "🧪 [试运行]\n" if dry_run else ""
+    return prefix + "\n".join(results)
+
+
 # ============================================================
 # Tab 2: 图片质量评分
 # ============================================================
-def _score_images(input_dir, mode, custom_prompt, model, provider, thinking=True, progress=gr.Progress()):
+def _score_images(input_dir, mode, custom_prompt, model, max_size, provider, thinking=True, progress=gr.Progress()):
     _apply_provider(provider)
     os.environ["ENABLE_THINKING"] = "true" if thinking else "false"
     from image_tools.detect_ai_errors import score_images
 
+    effective_max_size = max_size if max_size and max_size > 0 else None
+
     def on_progress(completed, total):
         progress(completed / total, desc=f"评分中 {completed}/{total}")
 
-    result = _capture_log(score_images, input_dir, mode, on_progress, custom_prompt, model or None)
+    result = _capture_log(score_images, input_dir, mode, on_progress, custom_prompt, model or None, effective_max_size)
     config.save_state("score", input_dir=input_dir, mode=mode, model=model, custom_prompt=custom_prompt)
     mode_labels = {"ai":"AI检测","photo":"漫展摄影","general":"通用照片","portrait":"人像","landscape":"风景","document":"文档扫描","art":"绘画插图"}
     mode_label = mode_labels.get(mode, mode)
@@ -156,7 +168,7 @@ def _classify_images(input_dir, classify_method, top_percent, bottom_percent,
 # Tab 3: 聊天截图识别
 # ============================================================
 def _explain_images(input_dir, vision_model, temperature, workers, internal_workers, max_tokens,
-                    provider, thinking=True, progress=gr.Progress()):
+                    max_size, provider, thinking=True, progress=gr.Progress()):
     _apply_provider(provider)
     os.environ["ENABLE_THINKING"] = "true" if thinking else "false"
     from image_tools.ocr_chat_screenshots import process_folder
@@ -171,6 +183,7 @@ def _explain_images(input_dir, vision_model, temperature, workers, internal_work
     def on_progress(completed, total):
         progress(completed / total, desc=f"识别中 {completed}/{total}")
 
+    effective_max_size = max_size if max_size and max_size > 0 else None
     buf = io.StringIO()
     with redirect_stdout(buf):
         process_folder(
@@ -181,7 +194,8 @@ def _explain_images(input_dir, vision_model, temperature, workers, internal_work
             workers,
             max_tokens,
             internal_workers,
-            progress_callback=on_progress
+            progress_callback=on_progress,
+            max_size=effective_max_size
         )
 
     result = f"✅ 输出目录: {output_dir}\n\n{buf.getvalue()}"
@@ -981,6 +995,12 @@ ollama pull qwen3     # 下载模型
                                 value=s["rename"].get("mode", "general"),
                                 info="不同模式侧重不同描述风格"
                             )
+                            rn_ctx = gr.Slider(0, 10, value=s["rename"].get("context_count", 3), step=1,
+                                               label="上下文数量",
+                                               info="参考前几张图的描述作为上下文。0=不参考，适合高级模型独立判断")
+                            rn_maxsz = gr.Slider(512, 4096, value=config.IMAGE_MAX_SIZE, step=256,
+                                                 label="图片最大边长（px）",
+                                                 info="超过此值的图片会等比缩小，越小速度越快但精度可能下降")
                             rn_dry = gr.Checkbox(label="试运行（只预览不实际改名）", value=s["rename"].get("dry_run", False),
                                                  info="强烈建议第一次使用时先试运行，看看效果")
                             rn_keep = gr.Checkbox(label="保留原文件名", value=s["rename"].get("keep_original", False),
@@ -991,7 +1011,7 @@ ollama pull qwen3     # 下载模型
                         with gr.Column(scale=3):
                             rn_output = gr.Textbox(label="处理结果", lines=15, elem_classes="output-text",
                                                    placeholder="处理完成后这里会显示每张图片的新名字...")
-                    rn_btn.click(_rename_images, [rn_input, rn_model, rn_workers, rn_dry, rn_keep, rn_mode, provider_info, rn_thinking], [rn_output])
+                    rn_btn.click(_rename_images, [rn_input, rn_model, rn_workers, rn_dry, rn_keep, rn_mode, rn_ctx, rn_maxsz, provider_info, rn_thinking], [rn_output])
                     def _stop_rename():
                         from image_tools.rename_images import request_stop
                         request_stop()
@@ -999,6 +1019,22 @@ ollama pull qwen3     # 下载模型
                     rn_stop.click(_stop_rename, outputs=[rn_output])
                     _bind_model_fetch(rn_fetch_btn, rn_model_type, rn_model, rn_fetch_st,
                                      provider_info, config.RENAME_MODEL)
+
+                    # ---- 按作品分类 ----
+                    gr.Markdown("---")
+                    gr.Markdown("### 📁 按《》作品名自动分类")
+                    gr.Markdown("将已重命名的图片按文件名中的《作品名》自动归入子文件夹。")
+                    with gr.Row():
+                        rn_cls_dry = gr.Checkbox(label="试运行", value=False,
+                                                 info="先预览分类结果，不实际移动")
+                        rn_cls_min = gr.Slider(1, 20, value=3, step=1,
+                                               label="最少图片数",
+                                               info="该作品图片少于此数量则不移动")
+                        rn_cls_btn = gr.Button("开始分类", variant="secondary")
+                    rn_cls_output = gr.Textbox(label="分类结果", lines=8, elem_classes="output-text",
+                                               placeholder="点击后显示分类结果...")
+
+                    rn_cls_btn.click(_classify_by_work, [rn_input, rn_cls_dry, rn_cls_min], [rn_cls_output])
 
                 # ---- 子 Tab: 图片质量评分与分类 ----
                 with gr.Tab("🔍 评分与分类"):
@@ -1041,6 +1077,9 @@ ollama pull qwen3     # 下载模型
                             de_model_type, de_model, de_fetch_btn, de_fetch_st, de_thinking = _make_model_selector(
                                 "视觉模型", s["score"].get("model", config.VISION_MODEL),
                                 "需要视觉模型。留空使用设置页默认值")
+                            de_maxsz = gr.Slider(512, 4096, value=config.IMAGE_MAX_SIZE, step=256,
+                                                 label="图片最大边长（px）",
+                                                 info="超过此值的图片会等比缩小，越小速度越快但精度可能下降")
                             de_prompt = gr.Textbox(
                                 label="自定义评分提示词（留空使用默认）",
                                 value=s["score"].get("custom_prompt", ""),
@@ -1100,7 +1139,7 @@ ollama pull qwen3     # 下载模型
                         request_stop()
                         return "⏹️ 已请求停止..."
 
-                    de_score_event = de_score_btn.click(_score_images, [de_input, de_mode, de_prompt, de_model, provider_info, de_thinking], [de_score_output])
+                    de_score_event = de_score_btn.click(_score_images, [de_input, de_mode, de_prompt, de_model, de_maxsz, provider_info, de_thinking], [de_score_output])
                     de_score_stop.click(_stop_scoring, outputs=[de_score_output])
                     de_cls_btn.click(_classify_images, [de_input, de_cls_method, de_top, de_bottom, de_min, de_max], [de_cls_output])
                     _bind_model_fetch(de_fetch_btn, de_model_type, de_model, de_fetch_st,
@@ -1249,13 +1288,16 @@ ollama pull qwen3     # 下载模型
                                                 info="每张图内部分两半并行处理")
                         ei_maxtok = gr.Slider(1000, 8000, value=s["ocr"].get("max_tokens", 5000), step=500, label="最大 Token 数",
                                               info="输出上限，长截图可适当调大")
+                        ei_maxsz = gr.Slider(512, 4096, value=config.IMAGE_MAX_SIZE, step=256,
+                                             label="图片最大边长（px）",
+                                             info="超过此值的图片会等比缩小，越小速度越快但精度可能下降")
                     with gr.Row():
                         ei_btn = gr.Button("开始识别", variant="primary")
                         ei_stop = gr.Button("停止", variant="stop")
                 with gr.Column(scale=3):
                     ei_output = gr.Textbox(label="处理日志", lines=15, elem_classes="output-text",
                                            placeholder="处理完成后这里会显示识别进度和结果...")
-            ei_btn.click(_explain_images, [ei_input, ei_model, ei_temp, ei_workers, ei_iworkers, ei_maxtok, provider_info, ei_thinking], [ei_output])
+            ei_btn.click(_explain_images, [ei_input, ei_model, ei_temp, ei_workers, ei_iworkers, ei_maxtok, ei_maxsz, provider_info, ei_thinking], [ei_output])
             def _stop_ocr():
                 from image_tools.ocr_chat_screenshots import request_stop
                 request_stop()

@@ -102,7 +102,8 @@ def slice_image_in_memory(image_path: Path) -> List[Image.Image]:
 def extract_text_from_slices(slices: List[Image.Image], model: str,
                              temperature: float = 0.3,
                              max_tokens: int = 5000,
-                             retries: int = 1) -> str:
+                             retries: int = 1,
+                             max_size: int = None) -> str:
     """识别一组切片，带重试机制"""
     for attempt in range(retries + 1):
         try:
@@ -118,7 +119,7 @@ def extract_text_from_slices(slices: List[Image.Image], model: str,
 
             content = [{"type": "text", "text": EXTRACT_PROMPT}]
             for sl in slices:
-                img_b64 = encode_image_to_base64(sl)
+                img_b64 = encode_image_to_base64(sl, max_size=max_size)
                 content.append({
                     "type": "image_url",
                     "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}
@@ -139,7 +140,8 @@ def process_single_image_parallel(image_path: Path,
                                   vision_model: str = config.VISION_MODEL_THINKING,
                                   temperature: float = 0.3,
                                   max_tokens: int = 5000,
-                                  internal_workers: int = 2) -> str:
+                                  internal_workers: int = 2,
+                                  max_size: int = None) -> str:
     """单张图片处理：切片→并发识别→合并保存"""
     print(f"\n📷 处理: {image_path.name}")
     slices = slice_image_in_memory(image_path)
@@ -153,7 +155,7 @@ def process_single_image_parallel(image_path: Path,
     # 如果切片很少或用户要求单线程，直接一次识别
     if total <= 2 or internal_workers <= 1:
         print(f"   📤 一次性发送全部 {total} 张切片...")
-        full_text = extract_text_from_slices(slices, vision_model, temperature, max_tokens)
+        full_text = extract_text_from_slices(slices, vision_model, temperature, max_tokens, max_size=max_size)
     else:
         mid = total // 2
         part1 = slices[:mid]
@@ -162,7 +164,7 @@ def process_single_image_parallel(image_path: Path,
 
         def recognize_part(part, name):
             print(f"      🚀 开始识别 {name}...")
-            text = extract_text_from_slices(part, vision_model, temperature, max_tokens)
+            text = extract_text_from_slices(part, vision_model, temperature, max_tokens, max_size=max_size)
             print(f"      ✅ {name} 识别完成，字符数: {len(text)}")
             return text
 
@@ -202,7 +204,8 @@ def process_folder(input_dir: Path,
                    max_workers: int = 1,        # 建议初期设为1
                    max_tokens: int = 5000,
                    internal_workers: int = 2,   # 建议初期设为1，稳定后提至2
-                   progress_callback=None):
+                   progress_callback=None,
+                   max_size: int = None):
     """批量处理文件夹内所有图片"""
     exts = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
     images = [f for f in input_dir.iterdir() if f.suffix.lower() in exts]
@@ -224,7 +227,7 @@ def process_folder(input_dir: Path,
         future_to_img = {
             executor.submit(
                 process_single_image_parallel,
-                img, out, vision_model, temperature, max_tokens, internal_workers
+                img, out, vision_model, temperature, max_tokens, internal_workers, max_size
             ): img
             for img, out in tasks
         }
