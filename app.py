@@ -303,9 +303,9 @@ _KB_HISTORY_DIR.mkdir(parents=True, exist_ok=True)
 
 def _kb_save_chat(chat_messages, chat_name):
     """保存聊天记录到文件"""
-    logger.info(f"[保存聊天] 名称={chat_name} 消息数={len(chat_messages) if chat_messages else 0}")
     if not chat_messages:
         return "❌ 没有聊天记录可保存"
+    logger.info(f"[保存聊天] 名称={chat_name} 消息数={len(chat_messages)}")
     if not chat_name or not chat_name.strip():
         chat_name = f"chat_{__import__('time').strftime('%Y%m%d_%H%M%S')}"
     chat_name = chat_name.strip()
@@ -320,6 +320,25 @@ def _kb_save_chat(chat_messages, chat_name):
     return f"✅ 已保存: {path.name}"
 
 
+def _kb_get_saved_chat(selection):
+    """根据名称查找已保存的聊天文件，返回 (path, data) 或 (None, None)"""
+    for f in sorted(_KB_HISTORY_DIR.glob("*.json"), key=lambda x: x.stat().st_mtime, reverse=True):
+        try:
+            data = __import__('json').loads(f.read_text(encoding="utf-8"))
+            name = _kb_clean_name(data.get("name", f.stem))
+            if name == selection or f.stem == selection:
+                return f, data
+        except Exception:
+            continue
+    return None, None
+
+
+def _kb_clean_name(raw: str) -> str:
+    """去掉旧版本可能附带的 ' (YYYY-MM-DD HH:MM:SS, N条)' 后缀"""
+    import re as _re
+    return _re.sub(r'\s*\(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},\s*\d+条\)\s*$', '', raw)
+
+
 def _kb_list_chats():
     """列出所有保存的聊天记录"""
     files = sorted(_KB_HISTORY_DIR.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True)
@@ -329,10 +348,7 @@ def _kb_list_chats():
     for f in files[:50]:
         try:
             data = __import__('json').loads(f.read_text(encoding="utf-8"))
-            name = data.get("name", f.stem)
-            time_str = data.get("time", "")
-            msg_count = len(data.get("messages", []))
-            choices.append(f"{name} ({time_str}, {msg_count}条)")
+            choices.append(_kb_clean_name(data.get("name", f.stem)))
         except Exception:
             choices.append(f.stem)
     return choices, f"共 {len(files)} 条记录"
@@ -342,19 +358,9 @@ def _kb_load_chat(selection):
     """加载选中的聊天记录"""
     if not selection:
         return [], ""
-    # 从显示名解析文件
-    files = sorted(_KB_HISTORY_DIR.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True)
-    for f in files[:50]:
-        try:
-            data = __import__('json').loads(f.read_text(encoding="utf-8"))
-            name = data.get("name", f.stem)
-            time_str = data.get("time", "")
-            msg_count = len(data.get("messages", []))
-            label = f"{name} ({time_str}, {msg_count}条)"
-            if label == selection:
-                return data.get("messages", []), f"✅ 已加载: {name}"
-        except Exception:
-            continue
+    _, data = _kb_get_saved_chat(selection)
+    if data:
+        return data.get("messages", []), f"✅ 已加载: {data.get('name', selection)}"
     return [], "❌ 未找到匹配的记录"
 
 
@@ -362,67 +368,218 @@ def _kb_delete_chat(selection):
     """删除选中的聊天记录"""
     if not selection:
         return "❌ 请选择要删除的记录"
-    files = sorted(_KB_HISTORY_DIR.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True)
-    for f in files[:50]:
-        try:
-            data = __import__('json').loads(f.read_text(encoding="utf-8"))
-            name = data.get("name", f.stem)
-            time_str = data.get("time", "")
-            msg_count = len(data.get("messages", []))
-            label = f"{name} ({time_str}, {msg_count}条)"
-            if label == selection:
-                f.unlink()
-                return f"✅ 已删除: {name}"
-        except Exception:
-            continue
+    f, data = _kb_get_saved_chat(selection)
+    if f:
+        name = data.get("name", selection)
+        f.unlink()
+        return f"✅ 已删除: {name}"
     return "❌ 未找到匹配的记录"
 
 
-def _query_kb_chat(query, keyword, model, k, batch_size, chat_messages, provider, thinking=True, progress=gr.Progress()):
-    """对话式知识库问答 handler"""
+def _do_web_search(query, max_results=5):
+    """联网搜索，优先用 Bing 中国版，失败回退到 DuckDuckGo"""
+    results = _search_bing_cn(query, max_results)
+    if results is not None:
+        return results
+    results = _search_ddg(query, max_results)
+    if results is not None:
+        return results
+    return None
+
+
+def _search_bing_cn(query, max_results=5):
+    """Bing 中国版搜索 (cn.bing.com)"""
+    try:
+        import requests
+        from lxml import html
+    except ImportError:
+        return None
+
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                          "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        }
+        resp = requests.get("https://cn.bing.com/search",
+                            params={"q": query}, headers=headers, timeout=10)
+        resp.encoding = "utf-8"
+        tree = html.fromstring(resp.text)
+        items = tree.xpath('//li[contains(@class, "b_algo")]')
+        results = []
+        for r in items[:max_results]:
+            title_els = r.xpath(".//h2//text()") or r.xpath(".//a//text()")
+            title = " ".join(title_els).strip() if title_els else ""
+            snippet_els = r.xpath(
+                './/p[contains(@class, "b_lineclamp") or contains(@class, "b_snippet")]//text()'
+            )
+            snippet = " ".join(snippet_els).strip() if snippet_els else ""
+            if not snippet:
+                snippet_els = r.xpath('.//div[contains(@class, "b_caption")]//p//text()')
+                snippet = " ".join(snippet_els).strip() if snippet_els else ""
+            link_els = r.xpath(".//h2//a/@href")
+            link = link_els[0] if link_els else ""
+            if title:
+                results.append(f"【{title}】\n{snippet}\n来源: {link}")
+        return "\n\n".join(results) if results else None
+    except Exception as e:
+        logger.warning(f"Bing 搜索失败: {e}")
+        return None
+
+
+def _search_ddg(query, max_results=5):
+    """DuckDuckGo 搜索（通过 ddgs 库）"""
+    try:
+        from ddgs import DDGS
+        results = []
+        with DDGS() as ddgs:
+            for r in ddgs.text(query, max_results=max_results):
+                results.append(f"【{r.get('title', '')}】\n{r.get('body', '')}\n来源: {r.get('href', '')}")
+        return "\n\n".join(results) if results else None
+    except ImportError:
+        logger.warning("ddgs 未安装，DuckDuckGo 搜索不可用")
+        return None
+    except Exception as e:
+        logger.warning(f"DuckDuckGo 搜索失败: {e}")
+        return None
+
+
+def _query_kb_chat(query, keyword, model, k, batch_size, chat_messages, provider, thinking=True, use_kb=True, use_web=False, progress=gr.Progress()):
+    """对话式知识库问答 handler（阻塞版，旧接口保留兼容）"""
     _apply_provider(provider)
-    logger.info(f"[知识库问答] 问题={query[:50]} 模型={model} k={k}")
     os.environ["ENABLE_THINKING"] = "true" if thinking else "false"
-    from text_tools.chapter_summary import query_knowledge_base_chat
 
     if not query or not query.strip():
         return chat_messages, "❌ 请输入问题"
 
     progress_lines = []
-
     def on_progress(msg: str):
         progress_lines.append(msg)
 
-    answer = query_knowledge_base_chat(
-        query=query.strip(),
-        keyword=keyword or "",
-        model=model or None,
-        k=int(k),
-        batch_size=int(batch_size),
-        chat_history=chat_messages,
-        progress_callback=on_progress,
+    web_results = _do_web_search(query.strip()) if use_web else None
+
+    from text_tools.kb_chat import prepare_kb_context
+    from langchain_openai import ChatOpenAI
+    from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+
+    llm = ChatOpenAI(
+        base_url=config.OPENAI_BASE_URL,
+        api_key=config.OPENAI_API_KEY,
+        model=model or config.TEXT_MODEL,
+        temperature=0.7,
+        extra_body=config.get_llm_extra_body(thinking),
     )
 
-    progress(1.0, desc="完成")
+    if use_kb:
+        prompt, msgs = prepare_kb_context(
+            query=query.strip(), keyword=keyword or "", k=int(k),
+            batch_size=int(batch_size), chat_history=chat_messages,
+            web_context=web_results, progress_callback=on_progress,
+        )
+        if prompt is not None:
+            answer = llm.invoke(prompt).content
+        else:
+            answer = llm.invoke(msgs).content
+    elif web_results:
+        lc_msgs = [SystemMessage(content=f"以下是联网搜索的最新结果，请基于这些信息回答用户问题：\n\n{web_results}")]
+        for m in (chat_messages or []):
+            if m["role"] == "user": lc_msgs.append(HumanMessage(content=m["content"]))
+            elif m["role"] == "assistant": lc_msgs.append(AIMessage(content=m["content"]))
+        lc_msgs.append(HumanMessage(content=query.strip()))
+        answer = llm.invoke(lc_msgs).content
+    else:
+        lc_msgs = []
+        for m in (chat_messages or []):
+            if m["role"] == "user": lc_msgs.append(HumanMessage(content=m["content"]))
+            elif m["role"] == "assistant": lc_msgs.append(AIMessage(content=m["content"]))
+        lc_msgs.append(HumanMessage(content=query.strip()))
+        answer = llm.invoke(lc_msgs).content
 
-    # 更新聊天记录
+    progress(1.0, desc="完成")
     new_messages = list(chat_messages) if chat_messages else []
     new_messages.append({"role": "user", "content": query.strip()})
     new_messages.append({"role": "assistant", "content": answer})
-
     history.add_entry("知识库问答", query[:50], "查询完成")
     return new_messages, ""
 
 
+def _kb_create_kb(name):
+    """创建新知识库目录"""
+    if not name or not name.strip():
+        return "❌ 请输入知识库名称", gr.update()
+    import re
+    safe = re.sub(r'[\\/*?:"<>|\s]+', '_', name.strip())
+    if not safe:
+        return "❌ 名称无效", gr.update()
+    docs_dir = config.DATA_DIR / safe
+    docs_dir.mkdir(parents=True, exist_ok=True)
+    # 重新获取列表
+    from text_tools.kb_manager import list_knowledge_bases
+    bases = list_knowledge_bases()
+    choices = [Path(b["docs_dir"]).as_posix() for b in bases]
+    labels = {Path(b["docs_dir"]).as_posix(): b["name"] for b in bases}
+    new_path = Path(docs_dir).as_posix()
+    return f"✅ 已创建: {docs_dir}", gr.update(choices=choices, value=new_path)
+
+
+def _kb_delete_msg(messages, msg_index):
+    """删除指定索引的消息"""
+    if not messages:
+        return messages, messages, "❌ 没有消息"
+    idx = int(msg_index)
+    if idx < 0 or idx >= len(messages):
+        return messages, messages, "❌ 索引无效"
+    new_msgs = list(messages)
+    new_msgs.pop(idx)
+    return new_msgs, new_msgs, f"✅ 已删除第 {idx+1} 条消息"
+
+
+def _kb_auto_title(provider, msgs):
+    """用 AI 根据对话内容生成简短标题（限30字）"""
+    if not msgs:
+        return ""
+    from langchain_openai import ChatOpenAI
+    from langchain_core.messages import HumanMessage, SystemMessage
+    user_qs = [m["content"][:200] for m in msgs if m.get("role") == "user"][:3]
+    text = " | ".join(user_qs)
+    _apply_provider(provider)
+    llm = ChatOpenAI(
+        base_url=config.OPENAI_BASE_URL,
+        api_key=config.OPENAI_API_KEY,
+        model=config.TEXT_MODEL,
+        temperature=0.3,
+        max_tokens=30,
+        extra_body=config.get_llm_extra_body(False),
+        request_timeout=30,
+    )
+    sys = SystemMessage(content="你是一个标题生成助手。根据用户的问题，用5-15个字生成一个简短的对话标题。只回复标题，不要加引号或解释。")
+    user = HumanMessage(content=f"生成标题：{text}")
+    try:
+        resp = llm.invoke([sys, user])
+        title = resp.content.strip()[:30]
+        import re as _re
+        title = _re.sub(r'[\\/*?:"<>|]', '', title)
+        return title or ""
+    except Exception:
+        return ""
 # ============================================================
-# Tab 6b: 知识库管理
-# ============================================================
-def _kb_list_docs():
+def _kb_get_choices():
+    """获取知识库选择列表"""
+    from text_tools.kb_manager import list_knowledge_bases
+    bases = list_knowledge_bases()
+    choices = [Path(b["docs_dir"]).as_posix() for b in bases]
+    labels = {Path(b["docs_dir"]).as_posix(): b["name"] for b in bases}
+    return bases, choices, labels
+
+
+def _kb_list_docs(selected_kb=None):
     from text_tools.kb_manager import list_documents, get_docs_dir
     from datetime import datetime
-    docs = list_documents()
+    docs_dir = Path(selected_kb) if selected_kb else None
+    docs = list_documents(docs_dir)
     if not docs:
-        return "📂 知识库目录为空，请先上传文档", ""
+        dir_path = docs_dir or get_docs_dir()
+        return f"📂 知识库目录为空，请先上传文档\n\n目录: {dir_path}", ""
     lines = []
     for d in docs:
         size = d['size']
@@ -430,37 +587,43 @@ def _kb_list_docs():
         dt = datetime.fromtimestamp(d['modified']).strftime("%m-%d %H:%M")
         lines.append(f"| {d['name']} | {size_str} | {dt} |")
     table = "| 文件名 | 大小 | 修改时间 |\n|---|---|---|\n" + "\n".join(lines)
-    info = f"共 {len(docs)} 个文档，目录: {get_docs_dir()}"
+    dir_path = docs_dir or get_docs_dir()
+    info = f"共 {len(docs)} 个文档，目录: {dir_path}"
     return table, info
 
 
-def _kb_upload(files):
+def _kb_upload(files, selected_kb=None):
     logger.info(f"[上传文档] 文件数={len(files) if files else 0}")
     if not files:
         return "❌ 请选择要上传的文件"
     from text_tools.kb_manager import upload_documents
+    docs_dir = Path(selected_kb) if selected_kb else None
     paths = [f.name if hasattr(f, 'name') else str(f) for f in files]
-    results = upload_documents(paths)
+    results = upload_documents(paths, docs_dir)
     return "\n".join(results)
 
 
-def _kb_delete(filename):
+def _kb_delete(filename, selected_kb=None):
     if not filename or not filename.strip():
         return "❌ 请输入要删除的文件名"
     from text_tools.kb_manager import delete_document
-    return delete_document(filename.strip())
+    docs_dir = Path(selected_kb) if selected_kb else None
+    return delete_document(filename.strip(), docs_dir)
 
 
-def _kb_delete_all():
+def _kb_delete_all(selected_kb=None):
     from text_tools.kb_manager import delete_all_documents
-    return delete_all_documents()
+    docs_dir = Path(selected_kb) if selected_kb else None
+    return delete_all_documents(docs_dir)
 
 
-def _kb_build_index(chunk_size, chunk_overlap, embedding_model, progress=gr.Progress()):
+def _kb_build_index(chunk_size, chunk_overlap, embedding_model, selected_kb=None, progress=gr.Progress()):
     logger.info(f"[构建索引] 块大小={chunk_size} 重叠={chunk_overlap} 模型={embedding_model}")
     from text_tools.kb_manager import build_index
+    from pathlib import Path as _Path
     progress(0.1, desc="准备构建索引...")
 
+    docs_dir = _Path(selected_kb) if selected_kb else None
     lines = []
     def on_progress(msg):
         lines.append(msg)
@@ -470,6 +633,7 @@ def _kb_build_index(chunk_size, chunk_overlap, embedding_model, progress=gr.Prog
             progress(0.9, desc="保存索引...")
 
     result = build_index(
+        docs_dir=docs_dir,
         chunk_size=int(chunk_size),
         chunk_overlap=int(chunk_overlap),
         embedding_model=embedding_model.strip() or None,
@@ -486,9 +650,11 @@ def _kb_stop_build():
     return "⏹️ 已请求停止索引构建..."
 
 
-def _kb_get_stats():
+def _kb_get_stats(selected_kb=None):
     from text_tools.kb_manager import get_index_stats_quick
-    stats = get_index_stats_quick()
+    from pathlib import Path as _Path
+    docs_dir = _Path(selected_kb) if selected_kb else None
+    stats = get_index_stats_quick(docs_dir=docs_dir)
     index_status = "✅ 已存在" if stats["exists"] else "❌ 未构建"
     size_mb = stats["index_size"] / (1024 * 1024) if stats["index_size"] else 0
     src_size_kb = stats["source_total_size"] / 1024 if stats["source_total_size"] else 0
@@ -896,6 +1062,48 @@ CSS = """
 .output-text { font-size: 0.9em; max-height: 500px; overflow-y: auto; }
 .hint { font-size: 0.85em; color: #888; margin-top: -8px; margin-bottom: 12px; }
 footer { visibility: hidden; }
+.top-bar { align-items: center !important; gap: 8px; background: #fff; padding: 8px 12px; border-bottom: 1px solid #e5e5e5; margin-bottom: 8px; }
+.top-bar h1 { margin: 0 !important; font-size: clamp(0.9em, 1.5vw, 1.2em) !important; white-space: nowrap; }
+.top-bar .gr-dropdown { min-width: 100px; }
+/* 聊天页面 - 侧边栏 */
+.kb-sidebar { background: #f8f9fa; border-right: 1px solid #e0e0e0; padding: 12px 10px !important; min-width: 200px; max-width: 280px; height: 100%; }
+.kb-sidebar > .wrap { display: flex !important; flex-direction: column !important; height: 100% !important; }
+.kb-sidebar .gr-button { width: 100%; margin-bottom: 4px; flex-shrink: 0; }
+#kb_chat_list { flex: 1 1 auto; overflow-y: auto; font-size: 0.85em; min-height: 400px; margin: 8px 0; }
+#kb_chat_list .wrap { gap: 2px; flex-direction: column !important; }
+#kb_chat_list label { padding: 8px 10px; border-radius: 6px; cursor: pointer; display: block !important; width: 100% !important; margin-bottom: 2px; }
+#kb_chat_list label:hover { background: #e8e8e8; }
+#kb_chat_list [type="radio"]:checked + label { background: #d0e4ff; font-weight: 600; }
+/* 聊天页面 - 主区域 */
+.kb-chat-fill { min-height: 500px; }
+.kb-chat-fill > .wrap { display: flex !important; flex-direction: column !important; }
+#kb_chatbot { flex: 1 1 auto; min-height: 400px; }
+#kb_chatbot > .wrap { height: 100% !important; }
+/* 聊天页面 - 设置工具栏 */
+.kb-toolbar { gap: 8px !important; padding: 4px 0 8px 0 !important; flex-wrap: wrap !important; }
+.kb-toolbar .gr-checkbox { margin-right: 4px; }
+/* 聊天页面 - 输入区 */
+.kb-input-row { border: 1px solid #d0d0d0; border-radius: 10px; padding: 8px 12px 6px 12px !important; background: #fff; margin-top: 8px; }
+.kb-input-row:focus-within { border-color: #1976d2; box-shadow: 0 0 0 1px rgba(25,118,210,0.2); }
+.kb-disclaimer { text-align: center; margin-top: 4px; flex-shrink: 0 !important; }
+.kb-disclaimer p { font-size: 0.75em !important; color: #999 !important; }
+"""
+
+JS_ONLOAD = """
+function resizeKbChat() {
+    var el = document.getElementById('kb_chatbot');
+    if (!el) return;
+    var fill = el.closest('.kb-chat-fill');
+    if (!fill) return;
+    var toolbar = fill.querySelector('.kb-toolbar');
+    var inputRow = fill.querySelector('.kb-input-row');
+    var disc = fill.querySelector('.kb-disclaimer');
+    var usedH = (toolbar ? toolbar.offsetHeight : 40) + (inputRow ? inputRow.offsetHeight : 80) + (disc ? disc.offsetHeight : 20);
+    var fillH = fill.getBoundingClientRect().height;
+    el.style.height = Math.max(300, fillH - usedH - 16) + 'px';
+}
+setTimeout(resizeKbChat, 400);
+window.addEventListener('resize', resizeKbChat);
 """
 
 def build_ui():
@@ -906,9 +1114,24 @@ def build_ui():
     _active_prov = config.get_active_provider()
 
     with gr.Blocks(title="LocalAITools") as app:
-        with gr.Row(equal_height=True):
-            gr.Markdown("# LocalAITools - 本地 AI 工具箱", elem_classes="hint")
-            restart_btn_top = gr.Button("🔄 重启", variant="secondary", scale=0, min_width=70)
+        # ---- 顶部栏：标题 + 供应商 + 操作按钮 ----
+        with gr.Row(equal_height=True, elem_classes="top-bar"):
+            gr.Markdown("# LocalAITools - 本地 AI 工具箱")
+            provider_select = gr.Dropdown(
+                choices=[p["name"] for p in _prov_list],
+                value=_prov_active,
+                label="供应商",
+                container=False,
+                scale=2,
+            )
+            prov_add_btn = gr.Button("添加", size="sm", scale=0, min_width=50)
+            prov_edit_btn = gr.Button("编辑", size="sm", scale=0, min_width=50)
+            prov_del_btn = gr.Button("删除", size="sm", scale=0, min_width=50)
+            restart_btn_top = gr.Button("🔄", size="sm", scale=0, min_width=40)
+        prov_info_text = gr.Markdown(
+            f"📡 `{_active_prov['base_url']}`",
+            elem_classes="hint",
+        )
         restart_msg = gr.Textbox("", interactive=False, container=False, show_label=False, visible=False)
 
         def _on_restart():
@@ -924,22 +1147,6 @@ def build_ui():
             return gr.update(value="🔄 正在重启...", visible=True)
 
         restart_btn_top.click(_on_restart, outputs=[restart_msg])
-
-        # ==================== 全局供应商选择器 ====================
-        with gr.Row(equal_height=True):
-            provider_select = gr.Dropdown(
-                choices=[p["name"] for p in _prov_list],
-                value=_prov_active,
-                label="供应商",
-                scale=2,
-            )
-            prov_info_text = gr.Markdown(
-                f"📡 `{_active_prov['base_url']}`",
-                elem_classes="hint",
-            )
-            prov_add_btn = gr.Button("➕", scale=0, variant="secondary", min_width=40)
-            prov_edit_btn = gr.Button("✏️", scale=0, variant="secondary", min_width=40)
-            prov_del_btn = gr.Button("🗑️", scale=0, variant="secondary", min_width=40)
 
         # 供应商编辑区域（默认隐藏）
         with gr.Accordion("添加/编辑供应商", open=False, visible=True) as prov_editor:
@@ -1500,6 +1707,357 @@ ollama pull qwen3     # 下载模型
             _bind_model_fetch(ei_fetch_btn, ei_model_type, ei_model, ei_fetch_st,
                              provider_info, config.VISION_MODEL_THINKING)
 
+        # ==================== Tab 6: 聊天 ====================
+        with gr.Tab("💬 聊天") as kb_chat_tab:
+            with gr.Row():
+                # ---- 左侧边栏：对话列表 ----
+                with gr.Column(scale=1, min_width=200, elem_classes="kb-sidebar"):
+                    gr.Markdown("### 💬 对话")
+                    kb_new_chat_btn = gr.Button("＋ 新建对话", size="sm")
+                    kb_chat_list = gr.Radio(label="", choices=[], interactive=True,
+                                             container=False, elem_id="kb_chat_list")
+                    with gr.Row():
+                        kb_del_btn = gr.Button("🗑 删除", size="sm")
+                        kb_refresh_btn = gr.Button("🔄 刷新", size="sm")
+                    kb_chat_status = gr.Markdown("")
+
+                # ---- 右侧：聊天主区域 ----
+                with gr.Column(scale=4, elem_classes="kb-chat-fill"):
+                    # 模型选择
+                    kb_model_type, kb_model, kb_fetch_btn, kb_fetch_st, _ = _make_model_selector(
+                        "模型", config.TEXT_MODEL, "", show_thinking=False)
+
+                    # 功能开关
+                    with gr.Row(elem_classes="kb-toolbar"):
+                        kb_use_rag = gr.Checkbox(label="📚 知识库检索", value=True,
+                                                  container=False, scale=0, min_width=80)
+                        kb_use_web = gr.Checkbox(label="🌐 联网搜索", value=False,
+                                                  container=False, scale=0, min_width=80)
+                        kb_thinking = gr.Checkbox(label="🧠 深度思考", value=True,
+                                                   container=False, scale=0, min_width=80)
+
+                    # 聊天区域
+                    kb_chatbot = gr.Chatbot(label="", placeholder="输入问题开始对话...",
+                                             elem_id="kb_chatbot", show_label=False, height=500)
+
+                    # 输入区域
+                    with gr.Column(elem_classes="kb-input-row"):
+                        kb_query = gr.Textbox(label="", placeholder="输入你的问题...",
+                                              lines=2, show_label=False, container=False,
+                                              elem_id="kb_query_box")
+                        with gr.Row():
+                            kb_btn = gr.Button("发送", variant="primary", scale=0, min_width=60)
+                            kb_clear_btn = gr.Button("清空", size="sm", scale=0, min_width=50)
+
+                    gr.Markdown("*AI 生成的内容可能不准确，请核实重要信息。*", elem_classes="kb-disclaimer")
+
+            # ---- 状态 ----
+            kb_all_chats = gr.State({})
+            kb_active_name = gr.State("")
+
+            # ---- 切换对话 ----
+            def _switch_chat(selection, all_chats):
+                if not selection:
+                    return all_chats, "", [], ""
+                all_chats = dict(all_chats) if all_chats else {}
+                msgs = all_chats.get(selection, [])
+                msgs, _ = _kb_load_chat(selection) if not msgs else (msgs, "")
+                all_chats[selection] = msgs
+                return all_chats, selection, msgs, f"📌 {selection}"
+
+            # ---- 发送查询（流式） ----
+            def _send_query_stream(query, model, all_chats, active_name, provider, thinking, use_rag, use_web):
+                if not query or not query.strip():
+                    yield all_chats, active_name, all_chats.get(active_name, []), gr.update(), gr.update(), "❌ 请输入问题"
+                    return
+                _apply_provider(provider)
+                os.environ["ENABLE_THINKING"] = "true" if thinking else "false"
+                all_chats = dict(all_chats) if all_chats else {}
+                msgs = list(all_chats.get(active_name, []))
+
+                model_name = model or config.TEXT_MODEL
+                from langchain_openai import ChatOpenAI
+                from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+
+                # 联网搜索
+                web_results = _do_web_search(query.strip()) if use_web else None
+
+                # 构建 LLM 输入
+                if use_rag:
+                    from text_tools.kb_chat import prepare_kb_context
+                    prompt, lc_msgs_fb = prepare_kb_context(
+                        query=query.strip(), keyword="", k=50,
+                        batch_size=20, chat_history=msgs, web_context=web_results,
+                    )
+                    if prompt is not None:
+                        llm_input = prompt
+                    else:
+                        llm_input = lc_msgs_fb
+                elif web_results:
+                    lc_msgs = [SystemMessage(content=f"以下是联网搜索的最新结果，请基于这些信息回答用户问题：\n\n{web_results}")]
+                    for m in msgs:
+                        if m["role"] == "user": lc_msgs.append(HumanMessage(content=m["content"]))
+                        elif m["role"] == "assistant": lc_msgs.append(AIMessage(content=m["content"]))
+                    lc_msgs.append(HumanMessage(content=query.strip()))
+                    llm_input = lc_msgs
+                else:
+                    lc_msgs = []
+                    for m in msgs:
+                        if m["role"] == "user": lc_msgs.append(HumanMessage(content=m["content"]))
+                        elif m["role"] == "assistant": lc_msgs.append(AIMessage(content=m["content"]))
+                    lc_msgs.append(HumanMessage(content=query.strip()))
+                    llm_input = lc_msgs
+
+                llm = ChatOpenAI(
+                    base_url=config.OPENAI_BASE_URL,
+                    api_key=config.OPENAI_API_KEY,
+                    model=model_name,
+                    temperature=0.7,
+                    streaming=True,
+                    extra_body=config.get_llm_extra_body(thinking),
+                )
+
+                def _get_reasoning(chunk) -> str:
+                    ak = getattr(chunk, 'additional_kwargs', {}) or {}
+                    for key in ('reasoning_content', 'thinking', 'reasoning'):
+                        if ak.get(key):
+                            return ak[key]
+                    rm = getattr(chunk, 'response_metadata', {}) or {}
+                    for key in ('reasoning_content', 'thinking', 'reasoning'):
+                        if rm.get(key):
+                            return rm[key]
+                    return ""
+
+                # 流式生成
+                new_msgs = list(msgs)
+                new_msgs.append({"role": "user", "content": query.strip()})
+                new_msgs.append({"role": "assistant", "content": ""})
+                all_chats[active_name] = new_msgs
+                radio_update = gr.update()
+                new_active = active_name
+
+                reasoning = ""
+                answer = ""
+
+                def _build_msg(reasoning, answer):
+                    if reasoning:
+                        return f"<details>\n<summary>🤔 思考过程</summary>\n\n{reasoning}\n\n</details>\n\n{answer}"
+                    return answer
+
+                try:
+                    for chunk in llm.stream(llm_input):
+                        r = _get_reasoning(chunk)
+                        c = chunk.content if hasattr(chunk, 'content') and chunk.content else ""
+                        if r:
+                            reasoning += r
+                        if c:
+                            answer += c
+                        new_msgs[-1]["content"] = _build_msg(reasoning, answer)
+                        yield all_chats, new_active, new_msgs, gr.update(), radio_update, ""
+                except Exception as e:
+                    new_msgs[-1]["content"] = f"❌ 调用失败: {e}"
+                    yield all_chats, new_active, new_msgs, gr.update(), radio_update, ""
+
+                # 自动命名
+                if active_name.startswith("新对话_") and len(new_msgs) >= 2:
+                    try:
+                        title = _kb_auto_title(provider, new_msgs)
+                        if title and title != active_name:
+                            del all_chats[active_name]
+                            all_chats[title] = new_msgs
+                            choices = sorted(all_chats.keys())
+                            radio_update = gr.update(choices=choices, value=title)
+                            new_active = title
+                    except Exception:
+                        pass
+
+                # 自动保存
+                _kb_save_chat(new_msgs, new_active)
+
+                history.add_entry("知识库问答", query[:50], "查询完成")
+                yield all_chats, new_active, new_msgs, gr.update(), radio_update, ""
+
+            # ---- 清空当前对话 ----
+            def _clear_chat_multi(all_chats, active_name):
+                if not active_name:
+                    return all_chats, active_name, [], "", "❌ 没有激活的对话"
+                all_chats = dict(all_chats) if all_chats else {}
+                all_chats[active_name] = []
+                return all_chats, active_name, [], "", "✅ 已清空"
+
+            # ---- 新建对话 ----
+            def _new_chat_multi(all_chats, active_name):
+                all_chats = dict(all_chats) if all_chats else {}
+                import time as _time
+                new_name = f"新对话_{_time.strftime('%H%M%S')}"
+                all_chats[new_name] = []
+                choices = sorted(all_chats.keys())
+                return all_chats, new_name, [], gr.update(choices=choices, value=new_name), f"✅ {new_name}"
+
+            # ---- 刷新对话列表 ----
+            def _refresh_chat_list_multi(all_chats, active_name):
+                all_chats = dict(all_chats) if all_chats else {}
+                saved_choices, status = _kb_list_chats()
+                merged = set(saved_choices) | set(all_chats.keys())
+                choices = sorted(merged)
+                return gr.update(choices=choices), status
+
+            # ---- 删除对话 ----
+            def _del_chat_multi(selection, all_chats, active_name):
+                if not selection:
+                    return all_chats, active_name, [], gr.update(), "❌ 请选择要删除的对话"
+                all_chats = dict(all_chats) if all_chats else {}
+                all_chats.pop(selection, None)
+                _kb_delete_chat(selection)
+                choices = sorted(all_chats.keys())
+                new_active = active_name if active_name != selection else ""
+                new_msgs = all_chats.get(new_active, []) if new_active else []
+                status = f"✅ 已删除 {selection}"
+                return (all_chats, new_active, new_msgs,
+                        gr.update(choices=choices, value=new_active if new_active else None), status)
+
+            # ---- 事件绑定 ----
+            kb_chat_list.change(_switch_chat, [kb_chat_list, kb_all_chats],
+                               [kb_all_chats, kb_active_name, kb_chatbot, kb_chat_status])
+
+            kb_btn.click(_send_query_stream,
+                         [kb_query, kb_model, kb_all_chats, kb_active_name, provider_info, kb_thinking, kb_use_rag, kb_use_web],
+                         [kb_all_chats, kb_active_name, kb_chatbot, kb_query, kb_chat_list, kb_chat_status])
+            kb_query.submit(_send_query_stream,
+                            [kb_query, kb_model, kb_all_chats, kb_active_name, provider_info, kb_thinking, kb_use_rag, kb_use_web],
+                            [kb_all_chats, kb_active_name, kb_chatbot, kb_query, kb_chat_list, kb_chat_status])
+
+            kb_clear_btn.click(_clear_chat_multi, [kb_all_chats, kb_active_name],
+                              [kb_all_chats, kb_active_name, kb_chatbot, kb_query, kb_chat_status])
+            kb_new_chat_btn.click(_new_chat_multi, [kb_all_chats, kb_active_name],
+                                 [kb_all_chats, kb_active_name, kb_chatbot, kb_chat_list, kb_chat_status])
+            kb_refresh_btn.click(_refresh_chat_list_multi, [kb_all_chats, kb_active_name],
+                                [kb_chat_list, kb_chat_status])
+            kb_del_btn.click(_del_chat_multi, [kb_chat_list, kb_all_chats, kb_active_name],
+                            [kb_all_chats, kb_active_name, kb_chatbot, kb_chat_list, kb_chat_status])
+
+            _kb_do_fetch = _bind_model_fetch(kb_fetch_btn, kb_model_type, kb_model, kb_fetch_st,
+                             provider_info, config.TEXT_MODEL)
+
+            def _auto_refresh_models(prov):
+                result = _kb_do_fetch(prov)
+                return result[0], result[1], result[2]
+
+            kb_chat_tab.select(_auto_refresh_models, [provider_info],
+                              [kb_model_type, kb_model, kb_fetch_st])
+            kb_chat_tab.select(_refresh_chat_list_multi, [kb_all_chats, kb_active_name],
+                              [kb_chat_list, kb_chat_status])
+
+        # ==================== Tab 7: 知识库设置 ====================
+        with gr.Tab("📚 知识库"):
+            gr.Markdown(_make_title("知识库管理 — 创建知识库、上传文档、构建索引"))
+            # ---- 顶部：知识库选择 + 创建 ----
+            _kb_bases, _kb_choices, _kb_labels = _kb_get_choices()
+            _kb_default = _kb_choices[0] if _kb_choices else ""
+            with gr.Row():
+                kb_selector = gr.Dropdown(
+                    label="知识库名称",
+                    choices=_kb_choices,
+                    value=_kb_default,
+                    interactive=True,
+                    allow_custom_value=True,
+                    scale=4,
+                )
+                kb_selector_refresh = gr.Button("🔄", scale=0, min_width=50)
+                kb_create_name = gr.Textbox(label="", placeholder="输入新知识库名称", scale=2,
+                                            show_label=False, container=False)
+                kb_create_btn = gr.Button("➕ 创建", variant="secondary", scale=0, min_width=70)
+            kb_selector_info = gr.Markdown("")
+            kb_selected_state = gr.State(_kb_default)
+
+            def _on_kb_select(selected):
+                if not selected:
+                    return "", selected
+                from text_tools.kb_manager import list_documents
+                docs = list_documents(Path(selected))
+                label = _kb_labels.get(selected, Path(selected).name)
+                info = f"**当前知识库:** {label}  |  路径: `{selected}`  |  文档数: {len(docs)}"
+                return info, selected
+
+            def _on_kb_refresh():
+                bases, choices, labels = _kb_get_choices()
+                default = choices[0] if choices else ""
+                info, selected = _on_kb_select(default)
+                return gr.update(choices=choices, value=default), info, selected
+
+            kb_selector.change(_on_kb_select, [kb_selector], [kb_selector_info, kb_selected_state])
+            kb_selector_refresh.click(_on_kb_refresh, outputs=[kb_selector, kb_selector_info, kb_selected_state])
+            kb_create_btn.click(_kb_create_kb, [kb_create_name], [kb_selector_info, kb_selector])
+
+            # 初始加载
+            _init_info = ""
+            if _kb_default:
+                from text_tools.kb_manager import list_documents as _list_docs_init
+                _init_docs = _list_docs_init(Path(_kb_default))
+                _init_label = _kb_labels.get(_kb_default, Path(_kb_default).name)
+                _init_info = f"**当前知识库:** {_init_label}  |  路径: `{_kb_default}`  |  文档数: {len(_init_docs)}"
+            kb_selector_info.value = _init_info
+
+            with gr.Tabs():
+                # ---- 子 Tab: 文档管理 ----
+                with gr.Tab("📄 文档管理"):
+                    with gr.Row():
+                        with gr.Column(scale=2):
+                            gr.Markdown("### 上传文档")
+                            kb_upload_files = gr.File(label="选择文件（支持 .txt .md .csv .json .log 等）",
+                                                      file_count="multiple",
+                                                      file_types=[".txt", ".md", ".csv", ".json", ".jsonl", ".log", ".py", ".rst"])
+                            kb_upload_btn = gr.Button("📤 上传到知识库", variant="primary")
+                            kb_upload_result = gr.Textbox(label="上传结果", lines=4, interactive=False)
+
+                            gr.Markdown("### 删除文档")
+                            kb_del_name = gr.Textbox(label="文件名", placeholder="输入要删除的文件名")
+                            with gr.Row():
+                                kb_del_btn = gr.Button("🗑️ 删除指定文件")
+                                kb_del_all_btn = gr.Button("🗑️ 清空全部", variant="stop")
+                            kb_del_result = gr.Textbox(label="删除结果", lines=2, interactive=False)
+
+                        with gr.Column(scale=3):
+                            gr.Markdown("### 文档列表")
+                            kb_doc_list = gr.Markdown("*点击「刷新」加载文档列表*")
+                            kb_doc_info = gr.Textbox(label="统计", lines=1, interactive=False)
+                            kb_doc_refresh_btn = gr.Button("🔄 刷新文档列表")
+
+                    kb_upload_btn.click(lambda f, kb: _kb_upload(f, kb), [kb_upload_files, kb_selected_state], [kb_upload_result])
+                    kb_del_btn.click(lambda n, kb: _kb_delete(n, kb), [kb_del_name, kb_selected_state], [kb_del_result])
+                    kb_del_all_btn.click(lambda kb: _kb_delete_all(kb), [kb_selected_state], [kb_del_result])
+                    kb_doc_refresh_btn.click(lambda kb: _kb_list_docs(kb), [kb_selected_state], [kb_doc_list, kb_doc_info])
+
+                # ---- 子 Tab: 索引构建 ----
+                with gr.Tab("🔧 索引构建"):
+                    with gr.Row():
+                        with gr.Column(scale=2):
+                            gr.Markdown("### 构建参数")
+                            kb_chunk_size = gr.Slider(100, 2000, value=config.KB_CHUNK_SIZE, step=50, label="文本块大小（字符）",
+                                                      info="每个文本块的最大字符数")
+                            kb_chunk_overlap = gr.Slider(0, 200, value=config.KB_CHUNK_OVERLAP, step=10, label="块间重叠（字符）",
+                                                         info="相邻文本块重叠的字符数，有助于保持上下文连贯")
+                            kb_embed_model = gr.Textbox(label="Embedding 模型（留空用默认）",
+                                                        placeholder="如 BAAI/bge-small-zh-v1.5 或本地路径",
+                                                        value="",
+                                                        info="HuggingFace 模型名或本地路径")
+                            with gr.Row():
+                                kb_build_btn = gr.Button("🔨 构建索引", variant="primary")
+                                kb_build_stop = gr.Button("⏹️ 停止", variant="stop")
+                            kb_build_result = gr.Textbox(label="构建日志", lines=10, interactive=False,
+                                                         placeholder="点击「构建索引」开始...")
+
+                        with gr.Column(scale=2):
+                            gr.Markdown("### 索引状态")
+                            kb_stats_btn = gr.Button("🔄 刷新状态")
+                            kb_stats_display = gr.Markdown("*点击「刷新状态」查看*")
+
+                    kb_build_btn.click(lambda cs, co, em, kb: _kb_build_index(cs, co, em, kb),
+                                       [kb_chunk_size, kb_chunk_overlap, kb_embed_model, kb_selected_state],
+                                       [kb_build_result])
+                    kb_build_stop.click(_kb_stop_build, outputs=[kb_build_result])
+                    kb_stats_btn.click(lambda kb: _kb_get_stats(kb), [kb_selected_state], [kb_stats_display])
+
         # ==================== Tab 4: 文本工具（聊天压缩 + 翻译）====================
         with gr.Tab("📝 文本工具"):
             with gr.Tabs():
@@ -1585,187 +2143,7 @@ ollama pull qwen3     # 下载模型
                     _bind_model_fetch(tr_fetch_btn, tr_model_type, tr_model, tr_fetch_st,
                                      provider_info, config.TEXT_MODEL)
 
-        # ==================== Tab 6: 知识库 ====================
-        with gr.Tab("📚 知识库"):
-            gr.Markdown(_make_title("知识库管理 & RAG 问答 — 上传文档、构建索引、智能检索"))
-            with gr.Tabs():
-                # ---- 子 Tab: 智能问答 ----
-                with gr.Tab("🔍 智能问答"):
-                    with gr.Row():
-                        with gr.Column(scale=3):
-                            kb_chatbot = gr.Chatbot(label="知识库问答",
-                                                     height=480,
-                                                     placeholder="输入问题开始对话...")
-                            with gr.Row():
-                                kb_query = gr.Textbox(label="",
-                                                      placeholder="输入你的问题...",
-                                                      lines=1,
-                                                      scale=4,
-                                                      show_label=False,
-                                                      container=False)
-                                kb_btn = gr.Button("发送", variant="primary", scale=1)
-                        with gr.Column(scale=1):
-                            with gr.Accordion("⚙️ 对话设置", open=True):
-                                kb_keyword = gr.Textbox(label="关键词过滤",
-                                                        placeholder="可选，如「白雨珺」",
-                                                        value="")
-                                kb_model_type, kb_model, kb_fetch_btn, kb_fetch_st, kb_thinking = _make_model_selector(
-                                    "文本模型", config.TEXT_MODEL,
-                                    "用于回答生成的文本模型")
-                                kb_k = gr.Slider(10, 200, value=50, step=10, label="检索片段数")
-                                kb_batch = gr.Slider(5, 50, value=20, step=5, label="每批处理数")
-                            with gr.Accordion("💾 聊天记录", open=True):
-                                kb_chat_name = gr.Textbox(label="记录名称",
-                                                          placeholder="留空自动生成")
-                                with gr.Row():
-                                    kb_save_btn = gr.Button("保存", size="sm")
-                                    kb_clear_btn = gr.Button("清空", size="sm", variant="stop")
-                                kb_chat_list = gr.Dropdown(label="历史记录", choices=[],
-                                                           interactive=True)
-                                with gr.Row():
-                                    kb_load_btn = gr.Button("加载", size="sm")
-                                    kb_del_chat_btn = gr.Button("删除", size="sm")
-                                    kb_refresh_btn = gr.Button("刷新", size="sm")
-                                kb_chat_status = gr.Textbox(label="", interactive=False, lines=1, show_label=False)
-
-                    # 隐藏的 state 存储聊天消息
-                    kb_chat_state = gr.State([])
-
-                    # 发送查询
-                    def _send_query(query, keyword, model, k, batch, messages, provider, thinking, progress=gr.Progress()):
-                        if not query or not query.strip():
-                            return messages, messages, "", "❌ 请输入问题"
-                        new_msgs, status = _query_kb_chat(query, keyword, model, k, batch, messages, provider, thinking, progress)
-                        return new_msgs, new_msgs, "", status
-
-                    kb_btn.click(
-                        _send_query,
-                        [kb_query, kb_keyword, kb_model, kb_k, kb_batch, kb_chat_state, provider_info, kb_thinking],
-                        [kb_chatbot, kb_chat_state, kb_query, kb_chat_status]
-                    )
-                    kb_query.submit(
-                        _send_query,
-                        [kb_query, kb_keyword, kb_model, kb_k, kb_batch, kb_chat_state, provider_info, kb_thinking],
-                        [kb_chatbot, kb_chat_state, kb_query, kb_chat_status]
-                    )
-
-                    # 保存聊天（保存后自动刷新列表）
-                    def _save_and_refresh(msgs, name):
-                        status = _kb_save_chat(msgs, name)
-                        choices, _ = _kb_list_chats()
-                        return status, gr.update(choices=choices)
-                    kb_save_btn.click(
-                        _save_and_refresh,
-                        [kb_chat_state, kb_chat_name],
-                        [kb_chat_status, kb_chat_list]
-                    )
-
-                    # 清空聊天
-                    def _clear_chat():
-                        return [], [], ""
-                    kb_clear_btn.click(_clear_chat, outputs=[kb_chatbot, kb_chat_state, kb_query])
-
-                    # 刷新聊天列表
-                    def _refresh_chat_list():
-                        choices, status = _kb_list_chats()
-                        return gr.update(choices=choices), status
-                    kb_refresh_btn.click(_refresh_chat_list, outputs=[kb_chat_list, kb_chat_status])
-
-                    # 选择聊天记录时加载
-                    kb_chat_list.change(
-                        lambda x: _kb_load_chat(x),
-                        [kb_chat_list],
-                        [kb_chat_state, kb_chat_status]
-                    ).then(
-                        lambda msgs: msgs,
-                        [kb_chat_state],
-                        [kb_chatbot]
-                    )
-
-                    # 加载聊天
-                    def _load_and_refresh(selection):
-                        msgs, status = _kb_load_chat(selection)
-                        return msgs, msgs, status
-                    kb_load_btn.click(
-                        _load_and_refresh,
-                        [kb_chat_list],
-                        [kb_chatbot, kb_chat_state, kb_chat_status]
-                    )
-
-                    # 删除聊天（删除后刷新列表）
-                    def _del_and_refresh(selection):
-                        status = _kb_delete_chat(selection)
-                        choices, _ = _kb_list_chats()
-                        return status, gr.update(choices=choices)
-                    kb_del_chat_btn.click(
-                        _del_and_refresh,
-                        [kb_chat_list],
-                        [kb_chat_status, kb_chat_list]
-                    )
-
-                    _bind_model_fetch(kb_fetch_btn, kb_model_type, kb_model, kb_fetch_st,
-                                     provider_info, config.TEXT_MODEL)
-
-                # ---- 子 Tab: 文档管理 ----
-                with gr.Tab("📄 文档管理"):
-                    with gr.Row():
-                        with gr.Column(scale=2):
-                            gr.Markdown("### 上传文档")
-                            kb_upload_files = gr.File(label="选择文件（支持 .txt .md .csv .json .log 等）",
-                                                      file_count="multiple",
-                                                      file_types=[".txt", ".md", ".csv", ".json", ".jsonl", ".log", ".py", ".rst"])
-                            kb_upload_btn = gr.Button("📤 上传到知识库", variant="primary")
-                            kb_upload_result = gr.Textbox(label="上传结果", lines=4, interactive=False)
-
-                            gr.Markdown("### 删除文档")
-                            kb_del_name = gr.Textbox(label="文件名", placeholder="输入要删除的文件名")
-                            with gr.Row():
-                                kb_del_btn = gr.Button("🗑️ 删除指定文件")
-                                kb_del_all_btn = gr.Button("🗑️ 清空全部", variant="stop")
-                            kb_del_result = gr.Textbox(label="删除结果", lines=2, interactive=False)
-
-                        with gr.Column(scale=3):
-                            gr.Markdown("### 文档列表")
-                            kb_doc_list = gr.Markdown("*点击「刷新」加载文档列表*")
-                            kb_doc_info = gr.Textbox(label="统计", lines=1, interactive=False)
-                            kb_refresh_btn = gr.Button("🔄 刷新文档列表")
-
-                    kb_upload_btn.click(_kb_upload, [kb_upload_files], [kb_upload_result])
-                    kb_del_btn.click(_kb_delete, [kb_del_name], [kb_del_result])
-                    kb_del_all_btn.click(_kb_delete_all, outputs=[kb_del_result])
-                    kb_refresh_btn.click(_kb_list_docs, outputs=[kb_doc_list, kb_doc_info])
-
-                # ---- 子 Tab: 索引构建 ----
-                with gr.Tab("🔧 索引构建"):
-                    with gr.Row():
-                        with gr.Column(scale=2):
-                            gr.Markdown("### 构建参数")
-                            kb_chunk_size = gr.Slider(100, 2000, value=config.KB_CHUNK_SIZE, step=50, label="文本块大小（字符）",
-                                                      info="每个文本块的最大字符数")
-                            kb_chunk_overlap = gr.Slider(0, 200, value=config.KB_CHUNK_OVERLAP, step=10, label="块间重叠（字符）",
-                                                         info="相邻文本块重叠的字符数，有助于保持上下文连贯")
-                            kb_embed_model = gr.Textbox(label="Embedding 模型（留空用默认）",
-                                                        placeholder="如 BAAI/bge-small-zh-v1.5 或本地路径",
-                                                        value="",
-                                                        info="HuggingFace 模型名或本地路径")
-                            with gr.Row():
-                                kb_build_btn = gr.Button("🔨 构建索引", variant="primary")
-                                kb_build_stop = gr.Button("⏹️ 停止", variant="stop")
-                            kb_build_result = gr.Textbox(label="构建日志", lines=10, interactive=False,
-                                                         placeholder="点击「构建索引」开始...")
-
-                        with gr.Column(scale=2):
-                            gr.Markdown("### 索引状态")
-                            kb_stats_btn = gr.Button("🔄 刷新状态")
-                            kb_stats_display = gr.Markdown("*点击「刷新状态」查看*")
-
-                    kb_build_btn.click(_kb_build_index,
-                                       [kb_chunk_size, kb_chunk_overlap, kb_embed_model],
-                                       [kb_build_result])
-                    kb_build_stop.click(_kb_stop_build, outputs=[kb_build_result])
-                    kb_stats_btn.click(_kb_get_stats, outputs=[kb_stats_display])
-
-        # ==================== Tab 7: LLM 压测 ====================
+        # ==================== Tab 8: LLM 压测 ====================
         with gr.Tab("⚡ LLM 压测"):
             gr.Markdown(_make_title("大模型推理性能测试 — 生成专业压测报告"))
             with gr.Accordion("📖 测试说明", open=False):
@@ -1986,7 +2364,7 @@ if __name__ == "__main__":
             print(update_msg)
         logger.info(f"LocalAITools 启动中... API={config.OPENAI_BASE_URL}")
         build_ui().launch(server_name="127.0.0.1", server_port=7860, share=False, inbrowser=True,
-                          theme=gr.themes.Soft(), css=CSS)
+                          theme=gr.themes.Soft(), css=CSS, js=JS_ONLOAD)
     except Exception:
         print("\n❌ 启动失败：\n")
         traceback.print_exc()

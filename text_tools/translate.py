@@ -17,6 +17,12 @@ import config
 
 from langchain_openai import ChatOpenAI
 
+_stop_flag = threading.Event()
+
+def request_stop():
+    """请求停止当前正在执行的翻译任务"""
+    _stop_flag.set()
+
 # -------------------- 环境配置 --------------------
 DEFAULT_MODEL = config.TEXT_MODEL
 MAX_CONTEXT_TOKENS = config.MAX_CONTEXT_TOKENS

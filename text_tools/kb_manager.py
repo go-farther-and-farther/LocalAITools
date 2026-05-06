@@ -39,6 +39,38 @@ def get_index_dir() -> Path:
     return d
 
 
+def list_knowledge_bases() -> list:
+    """扫描可用的知识库目录，返回 [{name, docs_dir, index_dir}]"""
+    bases = []
+    # 1) 默认知识库
+    docs = get_docs_dir()
+    idx = get_index_dir()
+    doc_count = len(list_documents(docs))
+    bases.append({
+        "name": f"默认知识库 ({doc_count} 文档)",
+        "docs_dir": str(docs),
+        "index_dir": str(idx),
+    })
+    # 2) data 目录下所有子目录（排除已知非知识库目录）
+    exclude = {"images", "models", "screenshots", "texts", "faiss_index"}
+    data_dir = config.DATA_DIR
+    if data_dir.exists():
+        for d in sorted(data_dir.iterdir()):
+            if not d.is_dir() or d.name in exclude:
+                continue
+            if d == docs:
+                continue  # 跳过默认知识库
+            doc_count = len(list_documents(d))
+            idx_dir = data_dir / "faiss_index" / d.name
+            label = f"{d.name} ({doc_count} 文档)" if doc_count > 0 else f"{d.name} (空)"
+            bases.append({
+                "name": label,
+                "docs_dir": str(d),
+                "index_dir": str(idx_dir),
+            })
+    return bases
+
+
 # ==================== 文档操作 ====================
 
 SUPPORTED_EXTS = {".txt", ".md", ".csv", ".json", ".jsonl", ".log", ".py", ".rst"}
@@ -243,7 +275,7 @@ def build_index(
     _log("保存索引...")
     vectorstore.save_local(str(index_dir))
 
-    # 重置 chapter_summary 中的缓存单例
+    # 重置 kb_chat 中的缓存单例
     _reset_kb_cache()
 
     total_chunks = len(all_docs)
@@ -252,14 +284,14 @@ def build_index(
 
 
 def _reset_kb_cache():
-    """重置 chapter_summary 中的 lazy 单例，使新索引生效"""
+    """重置 kb_chat 中的 lazy 单例，使新索引生效"""
     try:
-        from text_tools import chapter_summary
-        chapter_summary._embeddings = None
-        chapter_summary._vector = None
-        chapter_summary._bm25 = None
-        chapter_summary._all_docs = []
-        chapter_summary._all_texts = []
+        from text_tools import kb_chat
+        kb_chat._embeddings = None
+        kb_chat._vector = None
+        kb_chat._bm25 = None
+        kb_chat._all_docs = []
+        kb_chat._all_texts = []
     except Exception:
         pass
 
@@ -301,7 +333,7 @@ def get_index_stats(index_dir: Path = None) -> Dict:
     return stats
 
 
-def get_index_stats_quick(index_dir: Path = None) -> Dict:
+def get_index_stats_quick(index_dir: Path = None, docs_dir: Path = None) -> Dict:
     """快速获取索引统计（不加载 Embedding 模型）"""
     index_dir = index_dir or get_index_dir()
     index_file = index_dir / "index.faiss"
@@ -309,11 +341,11 @@ def get_index_stats_quick(index_dir: Path = None) -> Dict:
     stats = {
         "exists": index_file.exists(),
         "path": str(index_dir),
-        "docs_dir": str(get_docs_dir()),
+        "docs_dir": str(docs_dir or get_docs_dir()),
         "index_size": index_file.stat().st_size if index_file.exists() else 0,
     }
 
-    docs = list_documents()
+    docs = list_documents(docs_dir)
     stats["source_file_count"] = len(docs)
     stats["source_total_size"] = sum(d["size"] for d in docs)
 

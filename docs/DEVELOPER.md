@@ -42,7 +42,7 @@ LocalAITools/
 ├── text_tools/
 │   ├── translate.py            # 长篇文本翻译
 │   ├── compress_chat.py        # 聊天记录压缩
-│   ├── chapter_summary.py      # RAG 知识库问答引擎
+│   ├── kb_chat.py      # RAG 知识库问答引擎
 │   └── kb_manager.py           # 知识库文档管理（上传/删除/构建索引）
 │
 ├── benchmarks/
@@ -53,8 +53,9 @@ LocalAITools/
 ├── .gitignore
 ├── setup.bat / setup.sh    # 一键安装脚本
 ├── run.bat / run.sh        # 快速启动脚本
-├── README.md               # 用户文档
-└── DEVELOPER.md            # 本文档
+├── docs/                   # 项目文档
+│   ├── README.md           # 用户文档
+│   └── DEVELOPER.md        # 本文档
 ```
 
 **目录约定：**
@@ -340,7 +341,7 @@ LocalAITools/
 - 每批翻译 `batch_size` 章（默认 10），批内 `workers` 线程并发
 - 一批完成后再开始下一批（保证进度可恢复）
 
-### 4.6 知识库问答（chapter_summary.py + kb_manager.py）
+### 4.6 知识库问答（kb_chat.py + kb_manager.py）
 
 **功能：** 文档管理 + FAISS 向量检索 + BM25 关键词检索混合，对话式多轮问答。
 
@@ -353,10 +354,10 @@ LocalAITools/
   - 使用 `RecursiveCharacterTextSplitter` 分块（可配置块大小和重叠）
   - 使用 HuggingFace Embedding 模型向量化
   - 分批构建避免内存溢出
-  - 构建完成后自动重置 `chapter_summary.py` 中的缓存单例
+  - 构建完成后自动重置 `kb_chat.py` 中的缓存单例
 - `get_index_stats_quick()` — 快速获取索引状态（不加载模型）
 
-#### 4.6.2 问答引擎（chapter_summary.py）
+#### 4.6.2 问答引擎（kb_chat.py）
 
 **检索流程：**
 1. 加载 HuggingFace Embedding 模型（默认 `BAAI/bge-small-zh-v1.5`）
@@ -494,7 +495,7 @@ JPEG/WebP 不支持透明通道，保存前必须转 RGB。这修复了 V2.9 之
 
 ### 6.2 内存与性能
 
-- `chapter_summary.py` 加载 Embedding 模型到内存（bge-small 约 100MB），首次查询延迟明显。
+- `kb_chat.py` 加载 Embedding 模型到内存（bge-small 约 100MB），首次查询延迟明显。
 - `detect_ai_errors.py` 的 `encode_image()` 会将整张 PIL 图转为 base64 字符串在内存中，大批量处理时注意内存占用。`max_size` 参数可限制图片边长降低内存。
 - `translate.py` 整个文件读入内存后处理，超大文件（>100MB）可能 OOM。
 - `kb_manager.py` 构建索引时分批处理（batch_size=100），避免一次性向量化所有文档导致内存溢出。

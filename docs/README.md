@@ -148,7 +148,7 @@ python text_tools/compress_chat.py -i data/screenshots/texts
 python text_tools/translate.py -i data/texts/novel.txt -w 4
 
 # 知识库问答
-python text_tools/chapter_summary.py "你的问题" "可选关键词"
+python text_tools/kb_chat.py "你的问题" "可选关键词"
 
 # API 性能压测
 python benchmarks/speedtest.py --url http://localhost:1234/v1 --model qwen3.6-35b
@@ -226,7 +226,7 @@ LocalAITools/
 ├── text_tools/             # 文本 & 知识库工具
 │   ├── compress_chat.py    #   聊天记录压缩
 │   ├── translate.py        #   长篇翻译
-│   ├── chapter_summary.py  #   知识库问答引擎
+│   ├── kb_chat.py  #   知识库问答引擎
 │   └── kb_manager.py       #   知识库文档管理
 │
 └── benchmarks/             # 性能测试

@@ -16,5 +16,7 @@ python-dotenv
 faiss-cpu
 tiktoken
 gradio
+ddgs
+lxml
 # AMD 显卡用户取消注释下面一行（需要 PyTorch 2.5+）
 # torch-directml

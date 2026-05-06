@@ -243,16 +243,17 @@ def query_knowledge_base(
     return "\n\n".join(lines)
 
 
-def query_knowledge_base_chat(
+def prepare_kb_context(
     query: str,
     keyword: str = "",
-    model: Optional[str] = None,
     k: int = 50,
     batch_size: int = 20,
     chat_history: Optional[List[dict]] = None,
+    web_context: Optional[str] = None,
     progress_callback=None,
-) -> str:
-    """多轮对话式知识库问答。chat_history: [{"role": "user"/"assistant", "content": "..."}]"""
+):
+    """准备知识库上下文（检索 + 构建prompt），不调用LLM。
+    返回 (prompt_str, None) 用于 prompt 模式，或 (None, lc_messages) 用于消息模式。"""
     _init_kb()
 
     def _log(msg: str):
@@ -268,42 +269,75 @@ def query_knowledge_base_chat(
         _log(f"关键词「{keyword}」过滤后剩余 {len(docs)} 个片段")
 
     if not docs:
-        return "未找到相关文档片段，请调整查询或关键词。"
+        _log("未检索到相关片段，切换为通用对话模式..." + (" (含网络搜索结果)" if web_context else ""))
+        lc_msgs = []
+        if web_context:
+            from langchain_core.messages import SystemMessage
+            lc_msgs.append(SystemMessage(content=f"以下是联网搜索的最新结果，请基于这些信息回答用户问题：\n\n{web_context}"))
+        for m in (chat_history or []):
+            if m["role"] == "user":
+                from langchain_core.messages import HumanMessage
+                lc_msgs.append(HumanMessage(content=m["content"]))
+            elif m["role"] == "assistant":
+                from langchain_core.messages import AIMessage
+                lc_msgs.append(AIMessage(content=m["content"]))
+        from langchain_core.messages import HumanMessage
+        lc_msgs.append(HumanMessage(content=query.strip()))
+        return None, lc_msgs
 
     # 构建对话历史文本
     history_lines = []
     if chat_history:
-        for msg in chat_history[-10:]:  # 最近10轮
+        for msg in chat_history[-10:]:
             role = "用户" if msg["role"] == "user" else "助手"
             history_lines.append(f"{role}：{msg['content']}")
     chat_history_text = "\n".join(history_lines) if history_lines else "（无历史对话）"
 
-    # 合并所有检索片段
+    # 合并所有检索片段（含网络搜索结果）
     all_info = "\n\n".join(d.page_content for d in docs[:batch_size * 2])
+    if web_context:
+        all_info = f"【联网搜索结果】\n{web_context}\n\n【知识库检索结果】\n{all_info}"
 
-    llm = ChatOpenAI(
-        model=model or config.TEXT_MODEL,
-        streaming=True,
-        base_url=config.OPENAI_BASE_URL,
-        api_key=config.OPENAI_API_KEY,
-        extra_body=config.get_llm_extra_body()
-    )
-
-    _stop_flag.clear()
-    _log("正在生成回答...")
-
+    _log("正在生成回答..." + (" (含网络搜索)" if web_context else ""))
     prompt = PromptTemplate.from_template(PROMPT_CHAT).format(
         chat_history=chat_history_text,
         info=all_info,
         question=query,
     )
+    return prompt, None
 
+
+def query_knowledge_base_chat(
+    query: str,
+    keyword: str = "",
+    model: Optional[str] = None,
+    k: int = 50,
+    batch_size: int = 20,
+    chat_history: Optional[List[dict]] = None,
+    progress_callback=None,
+    web_context: Optional[str] = None,
+) -> str:
+    """多轮对话式知识库问答（阻塞版，内部使用 prepare_kb_context + LLM）"""
+    prompt, messages = prepare_kb_context(
+        query=query, keyword=keyword, k=k, batch_size=batch_size,
+        chat_history=chat_history, web_context=web_context,
+        progress_callback=progress_callback,
+    )
+    llm = ChatOpenAI(
+        model=model or config.TEXT_MODEL,
+        streaming=True,
+        base_url=config.OPENAI_BASE_URL,
+        api_key=config.OPENAI_API_KEY,
+        extra_body=config.get_llm_extra_body(),
+    )
+    _stop_flag.clear()
     try:
-        answer = llm.invoke(prompt).content
+        if prompt is not None:
+            return llm.invoke(prompt).content
+        else:
+            return llm.invoke(messages).content
     except Exception as e:
         return f"❌ 调用失败: {e}"
-
-    return answer
 
 
 # ==================== CLI ====================

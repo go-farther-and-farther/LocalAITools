@@ -29,7 +29,7 @@ BENCHMARK_MODEL = os.getenv("BENCHMARK_MODEL", "qwen3.6-35b-a3b@iq2_xxs")
 # ==================== Embedding 模型路径 ====================
 # 留空则使用 HuggingFace 默认在线下载；填写本地绝对路径可离线使用
 EMBEDDING_MODEL_PATH = os.getenv("EMBEDDING_MODEL_PATH", "")
-FAISS_INDEX_PATH = os.getenv("FAISS_INDEX_PATH", "faiss_index")
+FAISS_INDEX_PATH = os.getenv("FAISS_INDEX_PATH", "data/faiss_index")
 KB_CHUNK_SIZE = int(os.getenv("KB_CHUNK_SIZE", "500"))
 KB_CHUNK_OVERLAP = int(os.getenv("KB_CHUNK_OVERLAP", "50"))
 
@@ -103,7 +103,7 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 # ==================== 状态持久化（记住上次输入的所有参数） ====================
 import json as _json
 
-_STATE_FILE = ROOT_DIR / "state.json"
+_STATE_FILE = ROOT_DIR / "data" / "state.json"
 
 def load_state(tool_key: str = None) -> dict:
     """加载持久化状态。指定 tool_key 返回该工具参数字典，不指定返回全部。"""
