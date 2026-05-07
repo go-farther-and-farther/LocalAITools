@@ -1,0 +1,26 @@
+.output-text { font-size: 0.9em; max-height: 500px; overflow-y: auto; }
+.hint { font-size: 0.85em; color: #888; margin-top: -8px; margin-bottom: 12px; }
+footer { visibility: hidden; }
+.top-bar { align-items: center !important; gap: 8px; background: #fff; padding: 8px 12px; border-bottom: 1px solid #e5e5e5; margin-bottom: 8px; }
+.top-bar h1 { margin: 0 !important; font-size: clamp(0.9em, 1.5vw, 1.2em) !important; white-space: nowrap; }
+.top-bar .gr-dropdown { min-width: 100px; }
+/* 聊天页面 - 侧边栏 */
+.kb-sidebar { background: #f8f9fa; border-right: 1px solid #e0e0e0; padding: 12px 10px !important; min-width: 220px; max-width: 300px; height: 100%; overflow-y: auto; }
+.kb-sidebar > .wrap { display: flex !important; flex-direction: column !important; height: 100% !important; }
+.kb-sidebar .gr-button { width: 100%; margin-bottom: 4px; flex-shrink: 0; }
+.kb-sidebar .gr-accordion { margin-top: 8px; flex-shrink: 0; }
+#kb_chat_list { flex: 1 1 auto; overflow-y: auto; font-size: 0.85em; min-height: 200px; margin: 8px 0; }
+#kb_chat_list .wrap { gap: 2px; flex-direction: column !important; }
+#kb_chat_list label { padding: 8px 10px; border-radius: 6px; cursor: pointer; display: block !important; width: 100% !important; margin-bottom: 2px; }
+#kb_chat_list label:hover { background: #e8e8e8; }
+#kb_chat_list [type="radio"]:checked + label { background: #d0e4ff; font-weight: 600; }
+/* 聊天页面 - 主区域 */
+.kb-chat-fill { min-height: 500px; }
+.kb-chat-fill > .wrap { display: flex !important; flex-direction: column !important; }
+#kb_chatbot { flex: 1 1 auto; min-height: 400px; }
+#kb_chatbot > .wrap { height: 100% !important; }
+/* 聊天页面 - 输入区 */
+.kb-input-row { border: 1px solid #d0d0d0; border-radius: 10px; padding: 8px 12px 6px 12px !important; background: #fff; margin-top: 8px; }
+.kb-input-row:focus-within { border-color: #1976d2; box-shadow: 0 0 0 1px rgba(25,118,210,0.2); }
+.kb-disclaimer { text-align: center; margin-top: 4px; flex-shrink: 0 !important; }
+.kb-disclaimer p { font-size: 0.75em !important; color: #999 !important; }

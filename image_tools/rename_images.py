@@ -230,6 +230,12 @@ def get_timestamp_key(filepath: Path) -> str:
     return datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H%M%S")
 
 
+def _clean_model_tokens(text: str) -> str:
+    for tok in ('<|begin_of_box|>', '<|end_of_box|>', 'begin_of_box', 'end_of_box'):
+        text = text.replace(tok, '')
+    return text.strip()
+
+
 def generate_short_name(image_path: Path, model: str, original_stem: str,
                         recent_descriptions: List[str], mode: str = "general",
                         max_size: int = None) -> Optional[str]:
@@ -263,6 +269,7 @@ def generate_short_name(image_path: Path, model: str, original_stem: str,
         phrase = resp.content.strip()
         # 保留中文、字母、数字、空格、《》、常见的分隔符
         phrase = re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9《》 _-]', '', phrase).strip()
+        phrase = _clean_model_tokens(phrase)
 
         # 如果没有中文，带上下文重试一次
         if not re.search(r'[\u4e00-\u9fa5]', phrase):
