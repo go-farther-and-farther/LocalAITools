@@ -5,14 +5,18 @@
 """
 
 import os
+import re
 import shutil
 import threading
+import logging
 from pathlib import Path
 from typing import List, Dict, Optional
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 import config
+
+logger = logging.getLogger(__name__)
 
 _stop_flag = threading.Event()
 
@@ -73,7 +77,128 @@ def list_knowledge_bases() -> list:
 
 # ==================== 文档操作 ====================
 
-SUPPORTED_EXTS = {".txt", ".md", ".csv", ".json", ".jsonl", ".log", ".py", ".rst"}
+SUPPORTED_EXTS = {
+    ".txt", ".md", ".csv", ".json", ".jsonl", ".log", ".py", ".rst",
+    ".pdf", ".docx", ".html", ".htm",
+}
+
+
+# ==================== 格式解析 ====================
+
+def _parse_pdf(path: Path) -> str:
+    """从 PDF 文件提取文本（按页拼接）"""
+    try:
+        from PyPDF2 import PdfReader
+    except ImportError:
+        logger.warning("PyPDF2 未安装，无法解析 PDF: %s", path.name)
+        return ""
+    try:
+        reader = PdfReader(str(path))
+        pages = []
+        for i, page in enumerate(reader.pages):
+            text = page.extract_text() or ""
+            if text.strip():
+                pages.append(text)
+        if not pages:
+            logger.warning("PDF 无文本内容（可能是扫描件）: %s", path.name)
+        return "\n".join(pages)
+    except Exception as e:
+        logger.warning("PDF 解析失败: %s — %s", path.name, e)
+        return ""
+
+
+def _parse_docx(path: Path) -> str:
+    """从 DOCX 文件提取文本（所有段落拼接）"""
+    try:
+        from docx import Document as DocxDocument
+    except ImportError:
+        logger.warning("python-docx 未安装，无法解析 DOCX: %s", path.name)
+        return ""
+    try:
+        doc = DocxDocument(str(path))
+        paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+        if not paragraphs:
+            logger.warning("DOCX 内容为空: %s", path.name)
+        return "\n".join(paragraphs)
+    except Exception as e:
+        logger.warning("DOCX 解析失败: %s — %s", path.name, e)
+        return ""
+
+
+def _parse_html(html_content: str, source_name: str = "") -> str:
+    """从 HTML 内容提取可见文本"""
+    try:
+        from bs4 import BeautifulSoup
+    except ImportError:
+        logger.warning("beautifulsoup4 未安装，无法解析 HTML: %s", source_name)
+        return ""
+    try:
+        soup = BeautifulSoup(html_content, "html.parser")
+        # 移除 script / style 等不可见标签
+        for tag in soup(["script", "style", "noscript", "header", "footer", "nav"]):
+            tag.decompose()
+        text = soup.get_text(separator="\n", strip=True)
+        # 合并多余空行
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        if not text.strip():
+            logger.warning("HTML 无可见文本: %s", source_name)
+        return text
+    except Exception as e:
+        logger.warning("HTML 解析失败: %s — %s", source_name, e)
+        return ""
+
+
+def _read_file_as_text(path: Path) -> str:
+    """根据文件后缀选择合适的解析器，返回纯文本内容"""
+    suffix = path.suffix.lower()
+    if suffix == ".pdf":
+        return _parse_pdf(path)
+    elif suffix == ".docx":
+        return _parse_docx(path)
+    elif suffix in (".html", ".htm"):
+        try:
+            raw = path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            raw = path.read_bytes().decode("utf-8", errors="ignore")
+        return _parse_html(raw, path.name)
+    else:
+        # 纯文本类文件
+        return path.read_text(encoding="utf-8", errors="ignore")
+
+
+def import_url(url: str, docs_dir: Path = None) -> str:
+    """抓取 URL 内容并保存为知识库文档，返回操作结果"""
+    docs_dir = docs_dir or get_docs_dir()
+    try:
+        import requests
+    except ImportError:
+        return "❌ requests 未安装，无法抓取 URL"
+    try:
+        resp = requests.get(url, timeout=30, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        })
+        resp.raise_for_status()
+    except Exception as e:
+        return f"❌ 抓取失败: {e}"
+
+    text = _parse_html(resp.text, url)
+    if not text.strip():
+        return "❌ 页面无可提取文本"
+
+    # 生成文件名：用 URL 中的域名+路径，清理非法字符
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    base_name = (parsed.netloc + parsed.path).replace("/", "_").strip("_")
+    base_name = re.sub(r'[<>:"/\\|?*]', '_', base_name)[:80] or "webpage"
+    filename = base_name + ".txt"
+    dst = docs_dir / filename
+    # 避免重名
+    counter = 1
+    while dst.exists():
+        dst = docs_dir / f"{base_name}_{counter}.txt"
+        counter += 1
+    dst.write_text(text, encoding="utf-8")
+    return f"✅ 已导入: {dst.name} ({len(text)} 字符)"
 
 
 def list_documents(docs_dir: Path = None) -> List[Dict]:
@@ -226,7 +351,7 @@ def build_index(
     for doc_info in docs:
         _log(f"读取: {doc_info['name']}")
         try:
-            text = Path(doc_info["path"]).read_text(encoding="utf-8", errors="ignore")
+            text = _read_file_as_text(Path(doc_info["path"]))
         except Exception as e:
             _log(f"⚠️ 读取失败: {doc_info['name']} — {e}")
             continue

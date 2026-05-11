@@ -1,12 +1,19 @@
 """KB chat and document management helpers."""
-import json as _json, re, time, os, logging
+import json
+import re
+import time
+import os
+import logging
 from pathlib import Path
 import gradio as gr
-import config, history
+import config
+import history
+
 logger = logging.getLogger("LocalAITools")
 
 _KB_HISTORY_DIR = config.OUTPUT_DIR / "kb_chats"
 _KB_HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+
 
 def _kb_save_chat(chat_messages, chat_name):
     """保存聊天记录到文件"""
@@ -14,23 +21,24 @@ def _kb_save_chat(chat_messages, chat_name):
         return "❌ 没有聊天记录可保存"
     logger.info(f"[保存聊天] 名称={chat_name} 消息数={len(chat_messages)}")
     if not chat_name or not chat_name.strip():
-        chat_name = f"chat_{__import__('time').strftime('%Y%m%d_%H%M%S')}"
+        chat_name = f"chat_{time.strftime('%Y%m%d_%H%M%S')}"
     chat_name = chat_name.strip()
-    safe_name = __import__('re').sub(r'[\\/*?:"<>|]', '', chat_name)
+    safe_name = re.sub(r'[\\/*?:"<>|]', '', chat_name)
     path = _KB_HISTORY_DIR / f"{safe_name}.json"
     data = {
         "name": chat_name,
-        "time": __import__('time').strftime("%Y-%m-%d %H:%M:%S"),
+        "time": time.strftime("%Y-%m-%d %H:%M:%S"),
         "messages": chat_messages,
     }
-    path.write_text(__import__('json').dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     return f"✅ 已保存: {path.name}"
+
 
 def _kb_get_saved_chat(selection):
     """根据名称查找已保存的聊天文件，返回 (path, data) 或 (None, None)"""
     for f in sorted(_KB_HISTORY_DIR.glob("*.json"), key=lambda x: x.stat().st_mtime, reverse=True):
         try:
-            data = __import__('json').loads(f.read_text(encoding="utf-8"))
+            data = json.loads(f.read_text(encoding="utf-8"))
             name = _kb_clean_name(data.get("name", f.stem))
             if name == selection or f.stem == selection:
                 return f, data
@@ -38,10 +46,10 @@ def _kb_get_saved_chat(selection):
             continue
     return None, None
 
+
 def _kb_clean_name(raw: str) -> str:
     """去掉旧版本可能附带的 ' (YYYY-MM-DD HH:MM:SS, N条)' 后缀"""
-    import re as _re
-    return _re.sub(r'\s*\(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},\s*\d+条\)\s*$', '', raw)
+    return re.sub(r'\s*\(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},\s*\d+条\)\s*$', '', raw)
 
 def _kb_list_chats():
     """列出所有保存的聊天记录"""
@@ -51,7 +59,7 @@ def _kb_list_chats():
     choices = []
     for f in files[:50]:
         try:
-            data = __import__('json').loads(f.read_text(encoding="utf-8"))
+            data = json.loads(f.read_text(encoding="utf-8"))
             choices.append(_kb_clean_name(data.get("name", f.stem)))
         except Exception:
             choices.append(f.stem)
@@ -231,4 +239,14 @@ def _kb_get_stats(selected_kb=None):
         f"**源文档总大小:** {src_size_kb:.1f} KB\n"
         f"**源文档目录:** {stats['docs_dir']}"
     )
+
+
+def _kb_import_url(url, selected_kb=None):
+    """从 URL 抓取网页内容并导入知识库"""
+    if not url or not url.strip():
+        return "❌ 请输入 URL"
+    logger.info(f"[URL 导入] url={url}")
+    from text_tools.kb_manager import import_url
+    docs_dir = Path(selected_kb) if selected_kb else None
+    return import_url(url.strip(), docs_dir)
 

@@ -31,8 +31,37 @@ TARGET_LANG = config.TARGET_LANG
 PROGRESS_FILE = str(config.OUTPUT_DIR / "translation" / "progress.json")
 OUTPUT_DIR = str(config.OUTPUT_DIR / "translation")
 
+# -------------------- 术语表 --------------------
+def parse_glossary(glossary_text: str) -> Dict[str, str]:
+    """解析术语表文本为字典。
+    每行格式: 原文=译文
+    跳过空行和不含 = 的行，去首尾空格，重复键取最后一个。
+    """
+    result = {}
+    if not glossary_text or not glossary_text.strip():
+        return result
+    for line in glossary_text.strip().splitlines():
+        line = line.strip()
+        if not line or '=' not in line:
+            continue
+        key, _, value = line.partition('=')
+        key, value = key.strip(), value.strip()
+        if key and value:
+            result[key] = value
+    return result
+
+def build_glossary_prompt(glossary: Dict[str, str]) -> str:
+    """将术语表字典构建为 prompt 前缀指令。"""
+    if not glossary:
+        return ""
+    lines = ["术语表（必须遵守）："]
+    for src, tgt in glossary.items():
+        lines.append(f"- {src} → {tgt}")
+    lines.append("")  # 空行分隔
+    return "\n".join(lines)
+
 # -------------------- Prompt 模板 --------------------
-PROMPT_FIRST = f"""You are a professional literary translator. Translate the following {SOURCE_LANG} text into {TARGET_LANG}.
+PROMPT_FIRST = f"""{{glossary}}You are a professional literary translator. Translate the following {SOURCE_LANG} text into {TARGET_LANG}.
 Requirements:
 - Accurate and fluent literary translation.
 - Keep paragraph breaks exactly as in the original.
@@ -43,7 +72,7 @@ Requirements:
 
 {TARGET_LANG} translation:"""
 
-PROMPT_CONTINUE = f"""Continue translating the following {SOURCE_LANG} text into {TARGET_LANG}.
+PROMPT_CONTINUE = f"""{{glossary}}Continue translating the following {SOURCE_LANG} text into {TARGET_LANG}.
 The end of the preceding translation (last ~1000 characters only):
 ---
 {{prev_translation}}
@@ -178,7 +207,8 @@ def translate_single_chapter(
     chapter_content: str,
     prev_translation: str,           # 上一章完整译文（用于本章第一个子块的上下文）
     model_name: str,
-    llm_instance: ChatOpenAI = None
+    llm_instance: ChatOpenAI = None,
+    glossary_prompt: str = ""        # 术语表 prompt 前缀（可选）
 ) -> str:
     """
     翻译一个完整章节，内部自动切分子块，返回带英文标题的译文。
@@ -193,7 +223,7 @@ def translate_single_chapter(
     for sub_idx, chunk in enumerate(sub_chunks):
         # 确定上下文
         if chapter_idx == 0 and sub_idx == 0:
-            prompt = PROMPT_FIRST.format(text=chunk)
+            prompt = PROMPT_FIRST.format(glossary=glossary_prompt, text=chunk)
         else:
             if sub_idx == 0:
                 # 本章第一块，使用上一章完整译文（可能为空）
@@ -203,7 +233,7 @@ def translate_single_chapter(
                 ctx = translated_parts[-1]
             # 截断上下文防止过长（取末尾1000字符）
             ctx_short = ctx[-1000:] if len(ctx) > 1000 else ctx
-            prompt = PROMPT_CONTINUE.format(prev_translation=ctx_short, text=chunk)
+            prompt = PROMPT_CONTINUE.format(glossary=glossary_prompt, prev_translation=ctx_short, text=chunk)
 
         # 调用 LLM（带重试机制）
         max_retries = 3
@@ -244,7 +274,8 @@ def translate_book_parallel(
     workers: int = 2,
     resume: bool = True,
     max_chapters: Optional[int] = None,
-    progress_callback=None
+    progress_callback=None,
+    glossary_text: str = ""
 ):
     print(f"\n{'='*60}")
     print(f"🚀 开始翻译任务")
@@ -253,6 +284,15 @@ def translate_book_parallel(
     print(f"🤖 模型: {model_name}")
     print(f"🧵 每批: {batch_size} 章 | 并行数: {workers}")
     print(f"{'='*60}\n")
+
+    # 0. 解析术语表
+    glossary = parse_glossary(glossary_text)
+    glossary_prompt = build_glossary_prompt(glossary)
+    if glossary:
+        print(f"📋 术语表已加载，共 {len(glossary)} 条：")
+        for k, v in glossary.items():
+            print(f"   {k} → {v}")
+        print()
 
     # 1. 读取原文
     full_text = load_full_text(input_file)
@@ -322,7 +362,7 @@ def translate_book_parallel(
             for idx, title, content, prev_trans in tasks:
                 future = executor.submit(
                     translate_single_chapter,
-                    idx, title, content, prev_trans, model_name, llm
+                    idx, title, content, prev_trans, model_name, llm, glossary_prompt
                 )
                 future_to_idx[future] = idx
 
@@ -373,6 +413,7 @@ if __name__ == "__main__":
     parser.add_argument("--resume", action="store_true", default=True, help="从上次中断处继续（默认）")
     parser.add_argument("--no-resume", dest="resume", action="store_false", help="忽略进度，从头开始")
     parser.add_argument("--max-chapters", type=int, default=None, help="最多翻译章数（测试用）")
+    parser.add_argument("--glossary", "-g", type=str, default="", help="术语表文本（每行: 原文=译文）或术语表文件路径")
     args = parser.parse_args()
 
     if not os.path.exists(args.input):
@@ -386,6 +427,16 @@ if __name__ == "__main__":
         output_file = os.path.join(OUTPUT_DIR, f"translation.txt")
     else:
         output_file = args.output
+
+    # 解析术语表：支持文件路径或内联文本
+    glossary_text = ""
+    if args.glossary:
+        if os.path.isfile(args.glossary):
+            with open(args.glossary, 'r', encoding='utf-8') as gf:
+                glossary_text = gf.read()
+        else:
+            glossary_text = args.glossary
+
     translate_book_parallel(
         input_file=args.input,
         output_file=output_file,
@@ -393,5 +444,6 @@ if __name__ == "__main__":
         batch_size=args.batch,
         workers=args.workers,
         resume=args.resume,
-        max_chapters=args.max_chapters
+        max_chapters=args.max_chapters,
+        glossary_text=glossary_text
     )

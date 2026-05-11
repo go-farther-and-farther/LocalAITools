@@ -238,12 +238,13 @@ def _clean_model_tokens(text: str) -> str:
 
 def generate_short_name(image_path: Path, model: str, original_stem: str,
                         recent_descriptions: List[str], mode: str = "general",
-                        max_size: int = None) -> Optional[str]:
+                        max_size: int = None, custom_prompt: str = "") -> Optional[str]:
     """
     调用多模态模型生成中文短句。
     recent_descriptions: 最近生成的短句列表（用于上下文参考）
     mode: 命名模式（general/portrait/landscape/screenshot/food/anime）
     max_size: 图片最大边长，超过则等比缩小
+    custom_prompt: 自定义提示词，非空时覆盖 mode 对应的提示词
     """
     llm = get_shared_llm(model, temperature=0.5)
     img_base64 = encode_image(str(image_path), max_size=max_size)
@@ -256,7 +257,10 @@ def generate_short_name(image_path: Path, model: str, original_stem: str,
     else:
         desc_str = "（无）"
 
-    _, prompt_template = MODE_PROMPTS.get(mode, MODE_PROMPTS["general"])
+    if custom_prompt and custom_prompt.strip():
+        prompt_template = custom_prompt.strip() + _RENAME_SUFFIX
+    else:
+        _, prompt_template = MODE_PROMPTS.get(mode, MODE_PROMPTS["general"])
     prompt = prompt_template.format(original_stem=original_stem, recent_descriptions=desc_str)
 
     msg = HumanMessage(content=[
@@ -328,14 +332,15 @@ def safe_rename(old_path: Path, new_stem: str) -> bool:
 
 def process_one_image(img_path: Path, model: str, dry_run: bool,
                       recent_history: deque, keep_original: bool = False,
-                      mode: str = "general", max_size: int = None) -> tuple:
+                      mode: str = "general", max_size: int = None,
+                      custom_prompt: str = "") -> tuple:
     print(f"📷 处理: {img_path.name}")
     try:
         original_stem = img_path.stem
         # 获取最近的历史描述（线程安全）
         recent_list = get_recent_descriptions(recent_history)
 
-        short_name = generate_short_name(img_path, model, original_stem, recent_list, mode, max_size=max_size)
+        short_name = generate_short_name(img_path, model, original_stem, recent_list, mode, max_size=max_size, custom_prompt=custom_prompt)
         if short_name is None:
             print(f"   ⚠️ 短句生成失败，保留原文件名")
             return img_path.name, "生成失败(保留原名)"

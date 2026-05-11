@@ -22,8 +22,5 @@ build/
 data/
 outputs/
 
-# 用户状态（记住上次输入的目录等）
-data/state.json
-
 # FAISS 索引（用户数据，不提交）
 faiss_index/

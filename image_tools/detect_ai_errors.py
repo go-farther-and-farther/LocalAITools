@@ -434,6 +434,39 @@ def load_review_queue(target_dir: str) -> list:
     return items
 
 
+def load_scored_results(target_dir: str) -> List[dict]:
+    """从目录中已有的 .txt 文件读取评分结果，返回按分数从高到低排序的列表。
+    每个元素: {path, score, error, reason, classification}
+    classification: 'high' (>=7), 'low' (<4) 或 'mid'
+    """
+    dir_path = Path(target_dir)
+    items = []
+    for txt_path in sorted(dir_path.glob("*.txt")):
+        img_path = None
+        for ext in IMAGE_EXTENSIONS:
+            candidate = txt_path.with_suffix(ext)
+            if candidate.exists():
+                img_path = candidate
+                break
+        if img_path is None:
+            continue
+        try:
+            content = txt_path.read_text(encoding="utf-8").strip()
+            if content.startswith("错误:"):
+                items.append({"path": str(img_path), "score": None, "error": content[3:].strip(), "reason": "", "classification": "low"})
+            elif content.startswith("评分:"):
+                m = re.match(r'评分:\s*([\d.]+)\s*分(?:\s*\n?\s*理由:\s*(.*))?', content, re.DOTALL)
+                if m:
+                    score = float(m.group(1))
+                    reason = (m.group(2) or "").strip()
+                    cls = "high" if score >= 7 else ("low" if score < 4 else "mid")
+                    items.append({"path": str(img_path), "score": score, "error": None, "reason": reason, "classification": cls})
+        except Exception:
+            pass
+    items.sort(key=lambda x: x["score"] if x["score"] is not None else -1, reverse=True)
+    return items
+
+
 def move_single_to_category(img_path: str, category: str, target_dir: str) -> dict:
     """手动审核：将单张图片移到指定分类目录。category: 'high', 'low', 'undo'"""
     src = Path(img_path)
@@ -511,18 +544,18 @@ def score_images(target_dir: str, mode: str = "ai", progress_callback=None,
                 try:
                     score, error, reason = future.result()
                     save_txt(img_path, score, error, reason)
-                    results.append((img_path, score, error))
+                    results.append((img_path, score, error, reason))
                 except Exception as e:
                     logging.error(f"异常 ({img_path.name}): {e}")
-                    results.append((img_path, None, None))
+                    results.append((img_path, None, None, ""))
                 finally:
                     completed += 1
                     pbar.update(1)
                     if progress_callback:
                         progress_callback(completed, total)
 
-    scored = [(p, s) for p, s, e in results if s is not None and e is None]
-    errors = [(p, e) for p, s, e in results if e is not None]
+    scored = [(p, s) for p, s, e, r in results if s is not None and e is None]
+    errors = [(p, e) for p, s, e, r in results if e is not None]
     scored.sort(key=lambda x: x[1], reverse=True)
 
     logging.info(f"✅ 评分完成。有效评分: {len(scored)} 张，错误: {len(errors)} 张")
