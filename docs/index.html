@@ -3,124 +3,229 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>LocalAITools - 本地 AI 工具箱</title>
+<title>本地 AI 工具箱 — 整理万张图片只需几分钟</title>
+<meta name="description" content="开源本地 AI 工具集：图片智能分类、重命名、质量评分、聊天压缩、长篇翻译、知识库问答。数据不上传云端，双击安装即用。">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 :root{
-  --bg:#0f1117;--card:#1a1d27;--border:#2a2d3a;
-  --text:#e4e4e7;--muted:#9ca3af;--accent:#6366f1;
-  --accent2:#a78bfa;--green:#22c55e;--blue:#3b82f6;
+  --bg:#0a0b10;--card:#12141d;--card2:#181b27;--border:#232636;
+  --text:#e8e8ec;--muted:#8b8fa3;--accent:#7c6aef;
+  --accent2:#a78bfa;--accent3:#c084fc;--green:#34d399;--blue:#60a5fa;
+  --orange:#fb923c;--pink:#f472b6;
 }
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);line-height:1.6;overflow-x:hidden}
-a{color:var(--accent2);text-decoration:none}a:hover{text-decoration:underline}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text);line-height:1.7;overflow-x:hidden}
+a{color:var(--accent2);text-decoration:none;transition:color .2s}a:hover{color:var(--accent3)}
+code{background:var(--card2);padding:2px 6px;border-radius:4px;font-size:.9em}
+
+/* Nav */
+.nav{position:fixed;top:0;left:0;right:0;z-index:100;padding:12px 24px;display:flex;align-items:center;justify-content:space-between;background:rgba(10,11,16,.85);backdrop-filter:blur(12px);border-bottom:1px solid var(--border)}
+.nav-logo{font-weight:700;font-size:1.1rem;color:var(--text);display:flex;align-items:center;gap:8px}
+.nav-logo span{background:linear-gradient(135deg,var(--accent),var(--accent3));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.nav-links{display:flex;gap:24px;font-size:.9rem}.nav-links a{color:var(--muted)}.nav-links a:hover{color:var(--text)}
 
 /* Hero */
-.hero{text-align:center;padding:100px 20px 60px;background:linear-gradient(135deg,#1e1b4b 0%,#0f1117 50%,#1a1d27 100%);position:relative;overflow:hidden}
-.hero::before{content:'';position:absolute;top:-50%;left:-50%;width:200%;height:200%;background:radial-gradient(circle at 30% 50%,rgba(99,102,241,.08) 0%,transparent 50%),radial-gradient(circle at 70% 50%,rgba(167,139,250,.06) 0%,transparent 50%);pointer-events:none}
-.hero h1{font-size:3.5rem;font-weight:800;background:linear-gradient(135deg,var(--accent),var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:16px;position:relative}
-.hero p{font-size:1.25rem;color:var(--muted);max-width:600px;margin:0 auto 32px;position:relative}
+.hero{text-align:center;padding:140px 20px 80px;position:relative;overflow:hidden}
+.hero::before{content:'';position:absolute;top:0;left:0;right:0;bottom:0;background:radial-gradient(ellipse 80% 50% at 50% -20%,rgba(124,106,239,.15),transparent),radial-gradient(ellipse 60% 40% at 80% 60%,rgba(168,85,247,.08),transparent);pointer-events:none}
+.hero-badge{display:inline-flex;align-items:center;gap:6px;padding:6px 16px;border-radius:20px;background:rgba(124,106,249,.12);border:1px solid rgba(124,106,249,.25);color:var(--accent2);font-size:.85rem;margin-bottom:24px;position:relative}
+.hero-badge .pulse{width:6px;height:6px;border-radius:50%;background:var(--green);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.hero h1{font-size:clamp(2.4rem,5vw,3.8rem);font-weight:800;line-height:1.2;margin-bottom:20px;position:relative}
+.hero h1 em{font-style:normal;background:linear-gradient(135deg,var(--accent),var(--accent3),var(--pink));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.hero-sub{font-size:1.15rem;color:var(--muted);max-width:560px;margin:0 auto 36px;position:relative}
 .hero-btns{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;position:relative}
-.btn{display:inline-flex;align-items:center;gap:8px;padding:12px 28px;border-radius:10px;font-size:1rem;font-weight:600;cursor:pointer;border:none;transition:all .2s}
-.btn-primary{background:var(--accent);color:#fff}.btn-primary:hover{background:#4f46e5;text-decoration:none}
-.btn-outline{background:transparent;color:var(--text);border:1px solid var(--border)}.btn-outline:hover{border-color:var(--accent);text-decoration:none}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:14px 32px;border-radius:12px;font-size:1rem;font-weight:600;cursor:pointer;border:none;transition:all .25s;text-decoration:none}
+.btn-primary{background:linear-gradient(135deg,var(--accent),#6d28d9);color:#fff;box-shadow:0 4px 20px rgba(124,106,249,.3)}.btn-primary:hover{transform:translateY(-1px);box-shadow:0 6px 28px rgba(124,106,249,.4);color:#fff}
+.btn-outline{background:transparent;color:var(--text);border:1px solid var(--border)}.btn-outline:hover{border-color:var(--accent);color:var(--text)}
+.btn-ghost{background:transparent;color:var(--muted);padding:14px 20px}.btn-ghost:hover{color:var(--text)}
 
 /* Stats */
-.stats{display:flex;justify-content:center;gap:48px;padding:40px 20px;flex-wrap:wrap}
-.stat{text-align:center}.stat .num{font-size:2rem;font-weight:700;color:var(--accent2)}.stat .label{color:var(--muted);font-size:.9rem}
+.stats{display:flex;justify-content:center;gap:56px;padding:48px 20px;flex-wrap:wrap;border-bottom:1px solid var(--border)}
+.stat{text-align:center}.stat .num{font-size:2.2rem;font-weight:800;background:linear-gradient(135deg,var(--accent2),var(--accent3));-webkit-background-clip:text;-webkit-text-fill-color:transparent}.stat .label{color:var(--muted);font-size:.85rem;margin-top:2px}
+
+/* Before/After */
+.showcase{padding:80px 20px;max-width:900px;margin:0 auto}
+.showcase-grid{display:grid;grid-template-columns:1fr auto 1fr;gap:20px;align-items:center;margin-top:40px}
+.showcase-box{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:24px;font-family:monospace;font-size:.85rem;line-height:2;color:var(--muted)}
+.showcase-box .title{font-family:-apple-system,sans-serif;font-weight:600;color:var(--text);margin-bottom:12px;font-size:1rem}
+.showcase-arrow{color:var(--accent2);font-size:2rem}
+.badge{display:inline-block;padding:2px 8px;border-radius:6px;font-size:.75rem;font-weight:600;margin-right:4px}
+.badge-high{background:rgba(52,211,153,.15);color:var(--green)}
+.badge-mid{background:rgba(251,146,60,.15);color:var(--orange)}
+.badge-low{background:rgba(244,114,182,.15);color:var(--pink)}
 
 /* Features */
 .section{padding:80px 20px;max-width:1100px;margin:0 auto}
-.section-title{text-align:center;font-size:2rem;font-weight:700;margin-bottom:12px}
-.section-desc{text-align:center;color:var(--muted);margin-bottom:48px;max-width:600px;margin-left:auto;margin-right:auto}
+.section-title{text-align:center;font-size:2rem;font-weight:700;margin-bottom:8px}
+.section-desc{text-align:center;color:var(--muted);margin-bottom:48px;max-width:560px;margin-left:auto;margin-right:auto}
 
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:20px}
-.card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:28px;transition:border-color .2s}
-.card:hover{border-color:var(--accent)}
-.card-icon{font-size:2rem;margin-bottom:12px}
-.card h3{font-size:1.15rem;margin-bottom:8px}
-.card p{color:var(--muted);font-size:.95rem}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:28px;transition:all .25s;position:relative;overflow:hidden}
+.card:hover{border-color:var(--accent);transform:translateY(-2px);box-shadow:0 8px 30px rgba(0,0,0,.3)}
+.card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--accent),var(--accent3));opacity:0;transition:opacity .25s}
+.card:hover::before{opacity:1}
+.card-icon{font-size:1.8rem;margin-bottom:14px;display:block}
+.card h3{font-size:1.1rem;margin-bottom:8px;font-weight:600}
+.card p{color:var(--muted);font-size:.92rem;line-height:1.6}
+.card-tag{display:inline-block;padding:2px 10px;border-radius:6px;background:rgba(124,106,249,.1);color:var(--accent2);font-size:.78rem;margin-top:12px}
 
-/* How it works */
-.steps{display:flex;gap:20px;flex-wrap:wrap;justify-content:center}
-.step{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:28px;flex:1;min-width:220px;max-width:320px;text-align:center}
-.step-num{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:50%;background:var(--accent);color:#fff;font-weight:700;margin-bottom:12px}
-.step h3{margin-bottom:8px;font-size:1rem}
+/* Steps */
+.steps{display:flex;gap:16px;flex-wrap:wrap;justify-content:center}
+.step{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:32px 24px;flex:1;min-width:220px;max-width:320px;text-align:center;position:relative}
+.step-num{display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;border-radius:12px;background:linear-gradient(135deg,var(--accent),#6d28d9);color:#fff;font-weight:700;font-size:1.1rem;margin-bottom:16px}
+.step h3{margin-bottom:8px;font-size:1.05rem}
 .step p{color:var(--muted);font-size:.9rem}
+.step-arrow{position:absolute;right:-20px;top:50%;transform:translateY(-50%);color:var(--border);font-size:1.2rem}
 
 /* Models */
-.models{display:flex;gap:16px;flex-wrap:wrap;justify-content:center}
-.model-tag{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:8px 16px;font-size:.9rem;display:flex;align-items:center;gap:6px}
-.model-tag .dot{width:8px;height:8px;border-radius:50%;background:var(--green)}
+.models{display:flex;gap:12px;flex-wrap:wrap;justify-content:center}
+.model-tag{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:10px 18px;font-size:.88rem;display:flex;align-items:center;gap:8px;transition:border-color .2s}
+.model-tag:hover{border-color:var(--accent)}
+.model-tag .dot{width:7px;height:7px;border-radius:50%;background:var(--green)}
+
+/* Why local */
+.why-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;margin-top:40px}
+.why-card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:24px;text-align:center}
+.why-icon{font-size:2.4rem;margin-bottom:12px}
+.why-card h3{margin-bottom:6px;font-size:1rem}
+.why-card p{color:var(--muted);font-size:.88rem}
+
+/* Tech */
+.tech-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px}
+.tech-item{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;text-align:center;font-size:.9rem;font-weight:600}
+.tech-item span{display:block;color:var(--muted);font-weight:400;font-size:.8rem;margin-top:4px}
+
+/* CTA */
+.cta{text-align:center;padding:80px 20px;background:linear-gradient(180deg,transparent,rgba(124,106,249,.05))}
+.cta h2{font-size:2rem;margin-bottom:12px}
+.cta p{color:var(--muted);margin-bottom:28px}
 
 /* Footer */
-.footer{text-align:center;padding:40px 20px;color:var(--muted);font-size:.85rem;border-top:1px solid var(--border)}
+.footer{text-align:center;padding:32px 20px;color:var(--muted);font-size:.82rem;border-top:1px solid var(--border)}
+.footer a{color:var(--muted)}.footer a:hover{color:var(--text)}
 
-@media(max-width:640px){
-  .hero h1{font-size:2.2rem}
-  .stats{gap:24px}
-  .grid{grid-template-columns:1fr}
+@media(max-width:768px){
+  .nav-links{display:none}
+  .showcase-grid{grid-template-columns:1fr;text-align:center}
+  .showcase-arrow{transform:rotate(90deg)}
+  .step-arrow{display:none}
+  .stats{gap:28px}
 }
 </style>
 </head>
 <body>
 
+<nav class="nav">
+  <div class="nav-logo">📦 <span>本地 AI 工具箱</span></div>
+  <div class="nav-links">
+    <a href="#features">功能</a>
+    <a href="#quickstart">快速开始</a>
+    <a href="#models">模型</a>
+    <a href="https://github.com/chaniok/LocalAITools">GitHub</a>
+  </div>
+</nav>
+
 <section class="hero">
-  <h1>LocalAITools</h1>
-  <p>本地 AI 工具箱 — 图片智能重命名、AI 分类、质量评分、聊天压缩、长篇翻译、知识库问答。数据不上传云端，一键安装即用。</p>
+  <div class="hero-badge"><span class="pulse"></span> 开源 · 免费 · 本地运行</div>
+  <h1>整理万张图片<br>只需<em>几分钟</em></h1>
+  <p class="hero-sub">AI 智能分类、重命名、质量评分、聊天压缩、长篇翻译、知识库问答。<br>数据不上传云端，双击安装即用。</p>
   <div class="hero-btns">
-    <a class="btn btn-primary" href="https://github.com/chaniok/LocalAITools/releases">下载 Latest</a>
-    <a class="btn btn-outline" href="https://github.com/chaniok/LocalAITools">GitHub 仓库</a>
-    <a class="btn btn-outline" href="README.md">使用文档</a>
+    <a class="btn btn-primary" href="https://github.com/chaniok/LocalAITools/releases">⬇ 下载最新版</a>
+    <a class="btn btn-outline" href="https://github.com/chaniok/LocalAITools">⭐ GitHub</a>
+    <a class="btn btn-ghost" href="README.md">📖 使用文档</a>
   </div>
 </section>
 
 <div class="stats">
-  <div class="stat"><div class="num">8+</div><div class="label">AI 工具</div></div>
+  <div class="stat"><div class="num">10</div><div class="label">AI 工具</div></div>
   <div class="stat"><div class="num">0</div><div class="label">数据上传</div></div>
   <div class="stat"><div class="num">1</div><div class="label">双击安装</div></div>
   <div class="stat"><div class="num">100%</div><div class="label">免费开源</div></div>
 </div>
 
-<section class="section">
-  <div class="section-title">功能一览</div>
-  <div class="section-desc">一套工具解决图片整理、文本处理、知识管理的常见需求</div>
-  <div class="grid">
-    <div class="card">
-      <div class="card-icon">🤖</div>
-      <h3>AI 智能分类</h3>
-      <p>勾选分类 → AI 自动归类图片到对应文件夹。智能分组加速，1000 张相似截图只需几十次 API 调用。</p>
+<section class="showcase">
+  <div class="section-title">效果演示</div>
+  <div class="section-desc">AI 自动识别图片内容，生成中文短句文件名</div>
+  <div class="showcase-grid">
+    <div class="showcase-box">
+      <div class="title">📁 重命名前</div>
+      IMG_20240315_142356.jpg<br>
+      Screenshot_2024-03-15-14-23-56.png<br>
+      DSC_0042.JPG<br>
+      微信图片_20240315142356.jpg<br>
+      1710489836_001.webp<br>
+      photo_2024@03-15.jpg
     </div>
-    <div class="card">
-      <div class="card-icon">🖼️</div>
-      <h3>图片重命名</h3>
-      <p>6 种命名模式（通用/人像/风景/截图/美食/动漫），AI 生成中文短句替代杂乱文件名。试运行结果一键应用。</p>
-    </div>
-    <div class="card">
-      <div class="card-icon">🔍</div>
-      <h3>质量评分</h3>
-      <p>7 种检测模式覆盖 AI 图筛选、漫展选片、人像评估、文档扫描等场景。评分画廊 + CSV 导出。</p>
-    </div>
-    <div class="card">
-      <div class="card-icon">💬</div>
-      <h3>聊天</h3>
-      <p>多对话管理、流式输出、思考过程可见、联网搜索、RAG 知识库检索。Enter 发送，自动保存。</p>
-    </div>
-    <div class="card">
-      <div class="card-icon">📝</div>
-      <h3>聊天压缩 & 翻译</h3>
-      <p>OCR 聊天记录精简压缩。长篇文本按章节翻译，术语表保证一致性，断点续传。</p>
-    </div>
-    <div class="card">
-      <div class="card-icon">📚</div>
-      <h3>知识库问答</h3>
-      <p>上传文档 → 向量索引 → 对话式检索。支持 PDF/DOCX/HTML/URL，混合检索（向量 + BM25）。</p>
+    <div class="showcase-arrow">→</div>
+    <div class="showcase-box">
+      <div class="title">📁 重命名后</div>
+      <span class="badge badge-high">人像</span>穿白裙的少女在樱花树下微笑.jpg<br>
+      <span class="badge badge-mid">截图</span>微信聊天记录讨论周末出游计划.png<br>
+      <span class="badge badge-high">风景</span>日落时分金色稻田与远山剪影.JPG<br>
+      <span class="badge badge-mid">截图</span>淘宝订单详情页显示已发货.jpg<br>
+      <span class="badge badge-high">动漫</span>《原神》七七趴在草地上注视蝴蝶.webp<br>
+      <span class="badge badge-low">美食</span>抹茶拿铁拉花配草莓蛋糕.jpg
     </div>
   </div>
 </section>
 
-<section class="section">
+<section class="section" id="features">
+  <div class="section-title">功能一览</div>
+  <div class="section-desc">一套工具解决图片整理、文本处理、知识管理的常见需求</div>
+  <div class="grid">
+    <div class="card">
+      <span class="card-icon">🤖</span>
+      <h3>AI 智能分类</h3>
+      <p>勾选分类（照片/动漫/游戏/绘画/截图/风景/美食/文档），AI 自动归类。智能分组加速，1000 张相似截图只需几十次 API 调用。</p>
+      <span class="card-tag">⚡ 智能分组 · 试运行保存</span>
+    </div>
+    <div class="card">
+      <span class="card-icon">🖼️</span>
+      <h3>图片重命名</h3>
+      <p>6 种命名模式（通用/人像/风景/截图/美食/动漫），AI 生成中文短句替代杂乱文件名。支持自定义提示词。</p>
+      <span class="card-tag">试运行结果一键应用</span>
+    </div>
+    <div class="card">
+      <span class="card-icon">🔍</span>
+      <h3>质量评分</h3>
+      <p>7 种检测模式：AI 图错误检测、漫展摄影筛选、人像评估、风景评估、文档扫描、绘画插图。评分画廊 + CSV 导出。</p>
+      <span class="card-tag">自动分拣高/低质量</span>
+    </div>
+    <div class="card">
+      <span class="card-icon">💬</span>
+      <h3>AI 聊天</h3>
+      <p>多对话管理、流式输出、思考过程可见。AI 自主联网搜索（最多 3 轮），RAG 知识库检索可调。</p>
+      <span class="card-tag">联网搜索 · 知识库</span>
+    </div>
+    <div class="card">
+      <span class="card-icon">📝</span>
+      <h3>聊天压缩 & 翻译</h3>
+      <p>OCR 聊天记录精简压缩。长篇文本按章节翻译，术语表保证一致性，断点续传，多线程并行。</p>
+      <span class="card-tag">术语表 · 断点续传</span>
+    </div>
+    <div class="card">
+      <span class="card-icon">📚</span>
+      <h3>知识库问答</h3>
+      <p>上传文档 → 向量索引 → 对话式检索。支持 PDF/DOCX/HTML/URL，混合检索（向量 + BM25）。</p>
+      <span class="card-tag">FAISS · BM25 混合检索</span>
+    </div>
+    <div class="card">
+      <span class="card-icon">⚡</span>
+      <h3>LLM 压测</h3>
+      <p>测试 API 推理性能：TTFT、ITTL、吞吐量。自动生成专业图表报告，历史记录对比。</p>
+      <span class="card-tag">自动图表 · CSV 导出</span>
+    </div>
+    <div class="card">
+      <span class="card-icon">🏠</span>
+      <h3>内置本地模型</h3>
+      <p>不需要 LM Studio？内置 Qwen3.5-0.6B/1.7B 本地模型，CPU 推理，零 GPU 要求。双击安装即用。</p>
+      <span class="card-tag">llama-cpp · OpenAI 兼容</span>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="quickstart">
   <div class="section-title">三步开始</div>
-  <div class="section-desc">下载 → 双击 setup.bat → 开用</div>
+  <div class="section-desc">下载 → 双击 → 开用</div>
   <div class="steps">
     <div class="step">
       <div class="step-num">1</div>
@@ -130,7 +235,7 @@ a{color:var(--accent2);text-decoration:none}a:hover{text-decoration:underline}
     <div class="step">
       <div class="step-num">2</div>
       <h3>获取模型</h3>
-      <p>内置本地模型（0.6B 无需 GPU）或接入云端 API / LM Studio</p>
+      <p>内置本地模型（无需 GPU）或接入云端 API / LM Studio / Ollama</p>
     </div>
     <div class="step">
       <div class="step-num">3</div>
@@ -141,6 +246,32 @@ a{color:var(--accent2);text-decoration:none}a:hover{text-decoration:underline}
 </section>
 
 <section class="section">
+  <div class="section-title">为什么选本地？</div>
+  <div class="why-grid">
+    <div class="why-card">
+      <div class="why-icon">🔒</div>
+      <h3>数据不上传</h3>
+      <p>所有处理在本地完成，图片和文档不经过任何第三方服务器</p>
+    </div>
+    <div class="why-card">
+      <div class="why-icon">💰</div>
+      <h3>免费使用</h3>
+      <p>开源 MIT 协议，搭配本地模型完全零成本，云端 API 也只需几毛钱</p>
+    </div>
+    <div class="why-card">
+      <div class="why-icon">⚡</div>
+      <h3>一键安装</h3>
+      <p>双击 setup.bat 自动配置环境，不需要 Docker、不需要命令行</p>
+    </div>
+    <div class="why-card">
+      <div class="why-icon">🔧</div>
+      <h3>灵活接入</h3>
+      <p>支持 LM Studio、Ollama、硅基流动、DeepSeek 等所有 OpenAI 兼容 API</p>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="models">
   <div class="section-title">支持的模型服务</div>
   <div class="section-desc">任选一种，全部兼容 OpenAI API 格式</div>
   <div class="models">
@@ -155,19 +286,25 @@ a{color:var(--accent2);text-decoration:none}a:hover{text-decoration:underline}
 <section class="section">
   <div class="section-title">技术栈</div>
   <div class="section-desc">纯 Python，无前端构建工具链</div>
-  <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr))">
-    <div class="card" style="text-align:center"><strong>Gradio 6</strong><br><span style="color:var(--muted)">Web UI</span></div>
-    <div class="card" style="text-align:center"><strong>LangChain</strong><br><span style="color:var(--muted)">LLM 编排</span></div>
-    <div class="card" style="text-align:center"><strong>FAISS</strong><br><span style="color:var(--muted)">向量检索</span></div>
-    <div class="card" style="text-align:center"><strong>llama-cpp</strong><br><span style="color:var(--muted)">本地推理</span></div>
-    <div class="card" style="text-align:center"><strong>Pillow</strong><br><span style="color:var(--muted)">图片处理</span></div>
-    <div class="card" style="text-align:center"><strong>matplotlib</strong><br><span style="color:var(--muted)">压测图表</span></div>
+  <div class="tech-grid">
+    <div class="tech-item">Gradio 6<span>Web UI</span></div>
+    <div class="tech-item">LangChain<span>LLM 编排</span></div>
+    <div class="tech-item">FAISS<span>向量检索</span></div>
+    <div class="tech-item">llama-cpp<span>本地推理</span></div>
+    <div class="tech-item">Pillow<span>图片处理</span></div>
+    <div class="tech-item">tiktoken<span>Token 计数</span></div>
   </div>
 </section>
 
+<section class="cta">
+  <h2>开始整理你的图片</h2>
+  <p>下载 → 双击 setup.bat → 浏览器打开 localhost:7860</p>
+  <a class="btn btn-primary" href="https://github.com/chaniok/LocalAITools/releases">⬇ 下载最新版</a>
+</section>
+
 <footer class="footer">
-  <p>LocalAITools &mdash; 本地优先，数据不上传云端</p>
-  <p style="margin-top:8px">MIT License &bull; <a href="https://github.com/chaniok/LocalAITools">GitHub</a></p>
+  <p>本地 AI 工具箱 — 本地优先，数据不上传云端</p>
+  <p style="margin-top:6px">MIT License · <a href="https://github.com/chaniok/LocalAITools">GitHub</a> · <a href="README.md">文档</a></p>
 </footer>
 
 </body>
