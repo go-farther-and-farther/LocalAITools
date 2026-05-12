@@ -38,7 +38,8 @@ def _ai_classify_images(input_dir, checked_cats, custom_cats, custom_desc, model
         "动漫": "日本动漫、漫画风格的图片和同人插画",
         "游戏": "电子游戏相关的图片，包括游戏角色、截图、同人图",
         "绘画": "手绘、数字绘画、插画、原画等艺术作品",
-        "截图": "应用界面、网页、聊天记录等屏幕截图",
+        "聊天截图": "微信、QQ、Discord 等聊天软件的截图",
+        "应用截图": "软件界面、系统设置、手机桌面等屏幕截图",
         "风景": "自然风光、城市景观、旅行摄影",
         "美食": "食物、饮品、餐厅相关图片",
         "文档": "扫描件、证件、课件、合同等文档照片",
@@ -189,17 +190,25 @@ def render_tab_image_tools(s, provider_info):
                         "动漫": "日本动漫、漫画风格的图片和同人插画",
                         "游戏": "电子游戏相关的图片，包括游戏角色、截图、同人图",
                         "绘画": "手绘、数字绘画、插画、原画等艺术作品",
-                        "截图": "应用界面、网页、聊天记录等屏幕截图",
+                        "聊天截图": "微信、QQ、Discord 等聊天软件的截图",
+                        "应用截图": "软件界面、系统设置、手机桌面等屏幕截图",
                         "风景": "自然风光、城市景观、旅行摄影",
                         "美食": "食物、饮品、餐厅相关图片",
                         "文档": "扫描件、证件、课件、合同等文档照片",
                         "其他": "不属于以上任何分类（建议保留作为兜底）",
                     }
-                    _default_checked = ["照片", "动漫", "游戏", "截图", "其他"]
+                    _default_checked = ["照片", "动漫", "游戏", "聊天截图", "应用截图", "其他"]
                     # Load saved state if available
                     _saved_checked = s["ai_classify"].get("checked_cats", None)
                     if _saved_checked and isinstance(_saved_checked, list):
-                        _default_checked = _saved_checked
+                        # Filter out invalid choices (e.g. old "截图" split into "聊天截图"/"应用截图")
+                        _valid_names = set(_ALL_CATS.keys())
+                        _default_checked = [c for c in _saved_checked if c in _valid_names]
+                        # If old "截图" was checked, replace with both new categories
+                        if "截图" in _saved_checked:
+                            for new_cat in ("聊天截图", "应用截图"):
+                                if new_cat not in _default_checked:
+                                    _default_checked.append(new_cat)
 
                     gr.Markdown("**选择分类（勾选你需要的类别）**")
                     ai_cls_checks = gr.CheckboxGroup(

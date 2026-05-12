@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LocalAITools - 本地 AI 工具箱</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0f1117;--card:#1a1d27;--border:#2a2d3a;
+  --text:#e4e4e7;--muted:#9ca3af;--accent:#6366f1;
+  --accent2:#a78bfa;--green:#22c55e;--blue:#3b82f6;
+}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);line-height:1.6;overflow-x:hidden}
+a{color:var(--accent2);text-decoration:none}a:hover{text-decoration:underline}
+
+/* Hero */
+.hero{text-align:center;padding:100px 20px 60px;background:linear-gradient(135deg,#1e1b4b 0%,#0f1117 50%,#1a1d27 100%);position:relative;overflow:hidden}
+.hero::before{content:'';position:absolute;top:-50%;left:-50%;width:200%;height:200%;background:radial-gradient(circle at 30% 50%,rgba(99,102,241,.08) 0%,transparent 50%),radial-gradient(circle at 70% 50%,rgba(167,139,250,.06) 0%,transparent 50%);pointer-events:none}
+.hero h1{font-size:3.5rem;font-weight:800;background:linear-gradient(135deg,var(--accent),var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:16px;position:relative}
+.hero p{font-size:1.25rem;color:var(--muted);max-width:600px;margin:0 auto 32px;position:relative}
+.hero-btns{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;position:relative}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:12px 28px;border-radius:10px;font-size:1rem;font-weight:600;cursor:pointer;border:none;transition:all .2s}
+.btn-primary{background:var(--accent);color:#fff}.btn-primary:hover{background:#4f46e5;text-decoration:none}
+.btn-outline{background:transparent;color:var(--text);border:1px solid var(--border)}.btn-outline:hover{border-color:var(--accent);text-decoration:none}
+
+/* Stats */
+.stats{display:flex;justify-content:center;gap:48px;padding:40px 20px;flex-wrap:wrap}
+.stat{text-align:center}.stat .num{font-size:2rem;font-weight:700;color:var(--accent2)}.stat .label{color:var(--muted);font-size:.9rem}
+
+/* Features */
+.section{padding:80px 20px;max-width:1100px;margin:0 auto}
+.section-title{text-align:center;font-size:2rem;font-weight:700;margin-bottom:12px}
+.section-desc{text-align:center;color:var(--muted);margin-bottom:48px;max-width:600px;margin-left:auto;margin-right:auto}
+
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:20px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:28px;transition:border-color .2s}
+.card:hover{border-color:var(--accent)}
+.card-icon{font-size:2rem;margin-bottom:12px}
+.card h3{font-size:1.15rem;margin-bottom:8px}
+.card p{color:var(--muted);font-size:.95rem}
+
+/* How it works */
+.steps{display:flex;gap:20px;flex-wrap:wrap;justify-content:center}
+.step{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:28px;flex:1;min-width:220px;max-width:320px;text-align:center}
+.step-num{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:50%;background:var(--accent);color:#fff;font-weight:700;margin-bottom:12px}
+.step h3{margin-bottom:8px;font-size:1rem}
+.step p{color:var(--muted);font-size:.9rem}
+
+/* Models */
+.models{display:flex;gap:16px;flex-wrap:wrap;justify-content:center}
+.model-tag{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:8px 16px;font-size:.9rem;display:flex;align-items:center;gap:6px}
+.model-tag .dot{width:8px;height:8px;border-radius:50%;background:var(--green)}
+
+/* Footer */
+.footer{text-align:center;padding:40px 20px;color:var(--muted);font-size:.85rem;border-top:1px solid var(--border)}
+
+@media(max-width:640px){
+  .hero h1{font-size:2.2rem}
+  .stats{gap:24px}
+  .grid{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+
+<section class="hero">
+  <h1>LocalAITools</h1>
+  <p>本地 AI 工具箱 — 图片智能重命名、AI 分类、质量评分、聊天压缩、长篇翻译、知识库问答。数据不上传云端，一键安装即用。</p>
+  <div class="hero-btns">
+    <a class="btn btn-primary" href="https://github.com/chaniok/LocalAITools/releases">下载 Latest</a>
+    <a class="btn btn-outline" href="https://github.com/chaniok/LocalAITools">GitHub 仓库</a>
+    <a class="btn btn-outline" href="README.md">使用文档</a>
+  </div>
+</section>
+
+<div class="stats">
+  <div class="stat"><div class="num">8+</div><div class="label">AI 工具</div></div>
+  <div class="stat"><div class="num">0</div><div class="label">数据上传</div></div>
+  <div class="stat"><div class="num">1</div><div class="label">双击安装</div></div>
+  <div class="stat"><div class="num">100%</div><div class="label">免费开源</div></div>
+</div>
+
+<section class="section">
+  <div class="section-title">功能一览</div>
+  <div class="section-desc">一套工具解决图片整理、文本处理、知识管理的常见需求</div>
+  <div class="grid">
+    <div class="card">
+      <div class="card-icon">🤖</div>
+      <h3>AI 智能分类</h3>
+      <p>勾选分类 → AI 自动归类图片到对应文件夹。智能分组加速，1000 张相似截图只需几十次 API 调用。</p>
+    </div>
+    <div class="card">
+      <div class="card-icon">🖼️</div>
+      <h3>图片重命名</h3>
+      <p>6 种命名模式（通用/人像/风景/截图/美食/动漫），AI 生成中文短句替代杂乱文件名。试运行结果一键应用。</p>
+    </div>
+    <div class="card">
+      <div class="card-icon">🔍</div>
+      <h3>质量评分</h3>
+      <p>7 种检测模式覆盖 AI 图筛选、漫展选片、人像评估、文档扫描等场景。评分画廊 + CSV 导出。</p>
+    </div>
+    <div class="card">
+      <div class="card-icon">💬</div>
+      <h3>聊天</h3>
+      <p>多对话管理、流式输出、思考过程可见、联网搜索、RAG 知识库检索。Enter 发送，自动保存。</p>
+    </div>
+    <div class="card">
+      <div class="card-icon">📝</div>
+      <h3>聊天压缩 & 翻译</h3>
+      <p>OCR 聊天记录精简压缩。长篇文本按章节翻译，术语表保证一致性，断点续传。</p>
+    </div>
+    <div class="card">
+      <div class="card-icon">📚</div>
+      <h3>知识库问答</h3>
+      <p>上传文档 → 向量索引 → 对话式检索。支持 PDF/DOCX/HTML/URL，混合检索（向量 + BM25）。</p>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="section-title">三步开始</div>
+  <div class="section-desc">下载 → 双击 setup.bat → 开用</div>
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <h3>下载安装</h3>
+      <p>下载 ZIP 解压，双击 <code>setup.bat</code>，自动检测 Python 并安装依赖</p>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <h3>获取模型</h3>
+      <p>内置本地模型（0.6B 无需 GPU）或接入云端 API / LM Studio</p>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <h3>开始使用</h3>
+      <p>浏览器打开 <code>localhost:7860</code>，切到对应功能 Tab 即可</p>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="section-title">支持的模型服务</div>
+  <div class="section-desc">任选一种，全部兼容 OpenAI API 格式</div>
+  <div class="models">
+    <div class="model-tag"><span class="dot"></span>内置本地模型（Qwen3.5 0.6B/1.7B）</div>
+    <div class="model-tag"><span class="dot"></span>LM Studio</div>
+    <div class="model-tag"><span class="dot"></span>Ollama</div>
+    <div class="model-tag"><span class="dot"></span>硅基流动 / DeepSeek</div>
+    <div class="model-tag"><span class="dot"></span>vLLM / SGLang</div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="section-title">技术栈</div>
+  <div class="section-desc">纯 Python，无前端构建工具链</div>
+  <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr))">
+    <div class="card" style="text-align:center"><strong>Gradio 6</strong><br><span style="color:var(--muted)">Web UI</span></div>
+    <div class="card" style="text-align:center"><strong>LangChain</strong><br><span style="color:var(--muted)">LLM 编排</span></div>
+    <div class="card" style="text-align:center"><strong>FAISS</strong><br><span style="color:var(--muted)">向量检索</span></div>
+    <div class="card" style="text-align:center"><strong>llama-cpp</strong><br><span style="color:var(--muted)">本地推理</span></div>
+    <div class="card" style="text-align:center"><strong>Pillow</strong><br><span style="color:var(--muted)">图片处理</span></div>
+    <div class="card" style="text-align:center"><strong>matplotlib</strong><br><span style="color:var(--muted)">压测图表</span></div>
+  </div>
+</section>
+
+<footer class="footer">
+  <p>LocalAITools &mdash; 本地优先，数据不上传云端</p>
+  <p style="margin-top:8px">MIT License &bull; <a href="https://github.com/chaniok/LocalAITools">GitHub</a></p>
+</footer>
+
+</body>
+</html>
