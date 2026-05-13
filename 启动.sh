@@ -13,7 +13,7 @@ if [ ! -t 0 ]; then
             exit 0
         fi
     done
-    echo "错误：未找到终端模拟器，请手动在终端中运行: bash run.sh"
+    echo "错误：未找到终端模拟器，请手动在终端中运行: bash 启动.sh"
     exit 1
 fi
 
@@ -25,7 +25,7 @@ echo "  启动中...浏览器将自动打开"
 echo ""
 
 if [ ! -f ".venv/bin/python" ]; then
-    echo "  [!] 未检测到虚拟环境，请先运行 bash setup.sh 完成安装"
+    echo "  [!] 未检测到虚拟环境，请先运行 bash 安装.sh 完成安装"
     echo ""
     exit 1
 fi

@@ -75,7 +75,7 @@ LocalAITools/
 │   └── chat.js             # 聊天页 JS（Enter发送+主题+DOM稳定性）
 │
 ├── models/                 # 本地模型文件（.gguf）
-├── setup_local_model.bat   # 本地模型一键安装脚本
+├── 安装本地模型.bat        # 本地模型一键安装脚本
 └── docs/
     ├── README.md           # 用户文档
     └── DEVELOPER.md        # 本文档

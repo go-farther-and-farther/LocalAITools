@@ -23,6 +23,6 @@ python-docx>=1.1.0
 beautifulsoup4>=4.12.3
 # AMD 显卡用户取消注释下面一行（需要 PyTorch 2.5+）
 # torch-directml
-# 内置本地模型（可选，运行 setup_local_model.bat 安装）
+# 内置本地模型（可选，运行 安装本地模型.bat 安装）
 # llama-cpp-python
 # huggingface-hub

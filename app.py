@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 LocalAITools - Gradio Web 界面
-启动方式：python app.py  或  双击 run.bat
+启动方式：python app.py  或  双击 启动.bat
 然后浏览器打开 http://localhost:7860
 """
 
