@@ -20,6 +20,33 @@ logger = logging.getLogger("LocalAITools")
 _DRY_RUN_RENAME_FILE = config.ROOT_DIR / "data" / "dry_run_rename.json"
 _DRY_RUN_CLASSIFY_FILE = config.ROOT_DIR / "data" / "dry_run_classify.json"
 
+_IMG_EXTS = [".jpg", ".jpeg", ".png", ".webp", ".avif", ".gif", ".bmp"]
+
+
+def _find_images(input_dir: Path, include_subfolders: bool = False, max_depth: int = 2) -> list[Path]:
+    """Find image files in directory. If include_subfolders, traverse up to max_depth sub-levels."""
+    images = []
+    for ext in _IMG_EXTS:
+        images.extend(input_dir.glob(f"*{ext}"))
+        images.extend(input_dir.glob(f"*{ext.upper()}"))
+
+    if include_subfolders:
+        _traverse = [input_dir]
+        for depth in range(max_depth):
+            next_level = []
+            for d in _traverse:
+                for sub in sorted(d.iterdir()):
+                    if sub.is_dir():
+                        next_level.append(sub)
+                        for ext in _IMG_EXTS:
+                            images.extend(sub.glob(f"*{ext}"))
+                            images.extend(sub.glob(f"*{ext.upper()}"))
+            _traverse = next_level
+            if not _traverse:
+                break
+
+    return sorted(set(images))
+
 
 def rename_images(
     input_dir: str,
@@ -33,6 +60,7 @@ def rename_images(
     thinking: bool = True,
     progress_callback: Callable[[int, int], None] = None,
     rename_mode: str = "general",
+    include_subfolders: bool = False,
 ) -> str:
     """Rename images with AI-generated descriptions. Returns log text.
 
@@ -40,19 +68,14 @@ def rename_images(
     and setting ``os.environ["ENABLE_THINKING"]`` before invoking this.
     """
     os.environ["ENABLE_THINKING"] = "true" if thinking else "false"
-    logger.info(f"[图片重命名] 目录={input_dir} 模型={model} 线程={workers} 保留原名={keep_original} max_size={max_size}")
+    logger.info(f"[图片重命名] 目录={input_dir} 模型={model} 线程={workers} 保留原名={keep_original} max_size={max_size} 子文件夹={include_subfolders}")
     from image_tools.rename_images import process_one_image, get_shared_llm, _stop_flag
 
     input_path = Path(input_dir)
     if not input_path.is_dir():
         return "❌ 请输入有效的文件夹路径"
 
-    exts = [".jpg", ".jpeg", ".png", ".webp", ".avif", ".gif"]
-    images = []
-    for ext in exts:
-        images.extend(input_path.glob(f"*{ext}"))
-        images.extend(input_path.glob(f"*{ext.upper()}"))
-    images = sorted(set(images))
+    images = _find_images(input_path, include_subfolders)
 
     if not images:
         return "📂 未找到图片文件"
@@ -64,7 +87,7 @@ def rename_images(
     total = len(images)
     completed = 0
 
-    structured_pairs = []  # [(old_name, new_stem)] for dry-run save
+    structured_pairs = []  # [{old_name, new_stem, rel_path}] for dry-run save
 
     _stop_flag.clear()
     with ThreadPoolExecutor(max_workers=workers) as executor:
@@ -81,13 +104,20 @@ def rename_images(
                 executor.shutdown(wait=False, cancel_futures=True)
                 results.append("⏹️ 已请求停止")
                 break
+            img = futures[future]
+            rel_path = img.relative_to(input_path) if img.is_relative_to(input_path) else img.name
             try:
                 old_name, new_phrase = future.result()
-                results.append(f"{old_name} → {new_phrase}")
+                display_name = str(rel_path) if include_subfolders else old_name
+                results.append(f"{display_name} → {new_phrase}")
                 if dry_run and "生成失败" not in new_phrase and "错误" not in new_phrase:
-                    structured_pairs.append({"old_name": old_name, "new_stem": new_phrase})
+                    structured_pairs.append({
+                        "old_name": old_name,
+                        "new_stem": new_phrase,
+                        "rel_path": str(rel_path),
+                    })
             except Exception as e:
-                results.append(f"❌ 错误: {e}")
+                results.append(f"❌ {display_name}: {e}")
             completed += 1
             if progress_callback:
                 progress_callback(completed, total)
@@ -98,6 +128,7 @@ def rename_images(
             _DRY_RUN_RENAME_FILE.write_text(json.dumps({
                 "input_dir": str(input_dir),
                 "keep_original": keep_original,
+                "include_subfolders": include_subfolders,
                 "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "count": len(structured_pairs),
                 "results": structured_pairs,
@@ -137,9 +168,11 @@ def apply_rename_results(input_dir: str = None, keep_original: bool = False) -> 
     for item in results_list:
         old_name = item["old_name"]
         new_stem = item["new_stem"]
-        old_path = target_dir / old_name
+        # rel_path for subfolder support, fall back to old_name
+        rel_path = item.get("rel_path", old_name)
+        old_path = target_dir / rel_path
         if not old_path.exists():
-            log.append(f"⚠️ 文件不存在: {old_name}")
+            log.append(f"⚠️ 文件不存在: {rel_path}")
             fail += 1
             continue
 
@@ -147,10 +180,10 @@ def apply_rename_results(input_dir: str = None, keep_original: bool = False) -> 
             new_stem = f"{new_stem} {Path(old_name).stem}"
 
         if safe_rename(old_path, new_stem):
-            log.append(f"✅ {old_name} → {new_stem}{Path(old_name).suffix}")
+            log.append(f"✅ {rel_path} → {new_stem}{Path(old_name).suffix}")
             ok += 1
         else:
-            log.append(f"❌ 重命名失败: {old_name}")
+            log.append(f"❌ 重命名失败: {rel_path}")
             fail += 1
 
     summary = f"应用完成：成功 {ok} 张，失败 {fail} 张（共 {len(results_list)} 张）"
@@ -163,12 +196,13 @@ def classify_by_work(
     input_dir: str,
     dry_run: bool = False,
     min_count: int = 3,
+    extract_subfolders: bool = False,
 ) -> str:
     """Classify images by work title found in filenames. Returns log text."""
-    logger.info(f"[作品分类] 目录={input_dir} 试运行={dry_run} 最少={min_count}")
+    logger.info(f"[作品分类] 目录={input_dir} 试运行={dry_run} 最少={min_count} 提取子文件夹={extract_subfolders}")
     from image_tools.rename_images import classify_by_work as _classify_by_work_impl
 
-    results = _classify_by_work_impl(input_dir, dry_run, min_count=int(min_count))
+    results = _classify_by_work_impl(input_dir, dry_run, int(min_count), extract_subfolders)
     if not results:
         return "📂 未找到可分类的图片"
     prefix = "🧪 [试运行]\n" if dry_run else ""

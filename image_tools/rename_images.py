@@ -443,28 +443,50 @@ def main():
             print("（试运行模式）")
 
 
-def classify_by_work(input_dir: str, dry_run: bool = False, min_count: int = 3) -> list:
-    """将已重命名的图片按《作品名》自动归类到子文件夹，少于 min_count 张的作品跳过"""
+def classify_by_work(input_dir: str, dry_run: bool = False, min_count: int = 3,
+                      extract_subfolders: bool = False) -> list:
+    """将已重命名的图片按《作品名》自动归类到子文件夹，少于 min_count 张的作品跳过。
+    如果 extract_subfolders=True，也会提取子文件夹（1-2层）中的图片。"""
     dir_path = Path(input_dir)
     if not dir_path.is_dir():
         print(f"❌ 目录不存在: {input_dir}")
         return []
 
     exts = {".jpg", ".jpeg", ".png", ".webp", ".avif", ".gif", ".bmp"}
-    images = [f for f in dir_path.iterdir() if f.is_file() and f.suffix.lower() in exts]
 
-    if not images:
+    def _collect_images(base: Path, max_depth: int) -> list:
+        """Collect images from base and up to max_depth sub-levels."""
+        images = [(f, f.relative_to(base)) for f in base.iterdir() if f.is_file() and f.suffix.lower() in exts]
+        if max_depth >= 1:
+            for sub in sorted(base.iterdir()):
+                if not sub.is_dir():
+                    continue
+                images.extend((f, f.relative_to(base)) for f in sub.iterdir()
+                             if f.is_file() and f.suffix.lower() in exts)
+                if max_depth >= 2:
+                    for sub2 in sorted(sub.iterdir()):
+                        if not sub2.is_dir():
+                            continue
+                        images.extend((f, f.relative_to(base)) for f in sub2.iterdir()
+                                     if f.is_file() and f.suffix.lower() in exts)
+        return sorted(set(images))
+
+    max_depth = 2 if extract_subfolders else 0
+    image_pairs = _collect_images(dir_path, max_depth)  # [(absolute_path, relative_path)]
+
+    if not image_pairs:
         print("📂 未找到图片文件")
         return []
+
+    images_abs = [p[0] for p in image_pairs]
 
     # 统计每个《》出现次数
     work_count = {}
     no_match = []
-    for img in images:
+    for img in images_abs:
         m = re.search(r'《([^》]+)》', img.stem)
         if m:
             work = m.group(1)
-            # 清理文件名中不允许的字符
             work = re.sub(r'[\\/*?:"<>|]', '', work).strip()
             if work:
                 work_count[work] = work_count.get(work, 0) + 1
@@ -477,9 +499,9 @@ def classify_by_work(input_dir: str, dry_run: bool = False, min_count: int = 3) 
 
     # 过滤掉数量不足的作品
     skipped = {w: c for w, c in work_count.items() if c < min_count}
-    valid_works = {w: c for w, c in work_count.items() if c >= min_count}
 
-    print(f"📂 找到 {len(images)} 张图片，{len(work_count)} 个作品，{len(no_match)} 张无作品标记")
+    print(f"📂 找到 {len(images_abs)} 张图片，{len(work_count)} 个作品，{len(no_match)} 张无作品标记"
+          + ("（含子文件夹）" if extract_subfolders else ""))
     for work, count in sorted(work_count.items(), key=lambda x: -x[1]):
         skip_mark = f" (不足{min_count}张，跳过)" if work in skipped else ""
         print(f"   《{work}》: {count} 张{skip_mark}")
@@ -487,25 +509,27 @@ def classify_by_work(input_dir: str, dry_run: bool = False, min_count: int = 3) 
     results = []
     moved = 0
 
-    for img in images:
-        m = re.search(r'《([^》]+)》', img.stem)
+    for img_abs, img_rel in image_pairs:
+        m = re.search(r'《([^》]+)》', img_abs.stem)
         if not m:
-            results.append(f"{img.name} → (无作品标记，跳过)")
+            results.append(f"{img_rel} → (无作品标记，跳过)")
             continue
 
         work = re.sub(r'[\\/*?:"<>|]', '', m.group(1)).strip()
         if not work:
-            results.append(f"{img.name} → (作品名无效，跳过)")
+            results.append(f"{img_rel} → (作品名无效，跳过)")
             continue
         if work in skipped:
-            results.append(f"{img.name} → (《{work}》仅{skipped[work]}张，跳过)")
+            results.append(f"{img_rel} → (《{work}》仅{skipped[work]}张，跳过)")
             continue
 
+        # Target: input_dir/《work》/filename (extracts from subfolders)
         target_dir = dir_path / work
-        target_path = target_dir / img.name
+        target_path = target_dir / img_abs.name
 
         if dry_run:
-            results.append(f"{img.name} → {work}/{img.name}")
+            prefix = f"📤 {img_rel}" if extract_subfolders and img_rel.parent != Path('.') else str(img_rel)
+            results.append(f"{prefix} → {work}/{img_abs.name}")
             continue
 
         target_dir.mkdir(exist_ok=True)
@@ -513,18 +537,19 @@ def classify_by_work(input_dir: str, dry_run: bool = False, min_count: int = 3) 
         if target_path.exists():
             counter = 1
             while True:
-                candidate = target_dir / f"{img.stem}_{counter}{img.suffix}"
+                candidate = target_dir / f"{img_abs.stem}_{counter}{img_abs.suffix}"
                 if not candidate.exists():
                     target_path = candidate
                     break
                 counter += 1
 
         try:
-            img.rename(target_path)
-            results.append(f"{img.name} → {work}/{target_path.name}")
+            img_abs.rename(target_path)
             moved += 1
+            show = str(img_rel) if extract_subfolders else img_abs.name
+            results.append(f"✅ {show} → {work}/{target_path.name}")
         except Exception as e:
-            results.append(f"{img.name} → ❌ 移动失败: {e}")
+            results.append(f"❌ {img_abs.name}: {e}")
 
     if not dry_run:
         print(f"\n✅ 已移动 {moved} 张图片到对应作品文件夹")

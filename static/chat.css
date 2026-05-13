@@ -8,7 +8,9 @@
 }
 
 .output-text { font-size: 0.9em; max-height: 500px; overflow-y: auto; }
-.hint { font-size: 0.85em; color: #888; margin-top: -8px; margin-bottom: 12px; }
+.hint { font-size: 0.85em; color: #888; margin-top: 2px; margin-bottom: 4px; }
+.small-note { font-size: 0.85em; color: #777; margin-top: 2px; margin-bottom: 6px; }
+.small-note p { margin: 0; }
 footer { opacity: 0.4; font-size: 0.75em; }
 footer:hover { opacity: 0.8; }
 

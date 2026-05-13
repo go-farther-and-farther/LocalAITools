@@ -154,14 +154,13 @@ def build_ui():
             outputs=[prov["prov_info_text"], prov["provider_info"], prov["providers_state"]],
         ).then(_refresh_all_models, inputs=[prov["provider_info"]], outputs=_model_outputs)
 
-        # ---- Chat tab: bind tab-select events ----
-        def _auto_refresh_chat_models(prov_info):
-            result = t_chat["_kb_do_fetch"](prov_info)
-            return result[0], result[1], result[2]
+        # ---- Chat tab: refresh conversation list on select (in-memory only, no disk I/O) ----
+        def _on_chat_tab_select(all_chats, active_name):
+            all_chats = dict(all_chats) if all_chats else {}
+            choices = sorted(all_chats.keys())
+            return gr.update(choices=choices), ""
 
-        kb_chat_tab.select(_auto_refresh_chat_models, [prov["provider_info"]],
-                           [t_chat["kb_model_type"], t_chat["kb_model"], t_chat["kb_fetch_st"]])
-        kb_chat_tab.select(t_chat["_refresh_chat_list_multi"],
+        kb_chat_tab.select(_on_chat_tab_select,
                            [t_chat["kb_all_chats"], t_chat["kb_active_name"]],
                            [t_chat["kb_chat_list"], t_chat["kb_chat_status"]])
 

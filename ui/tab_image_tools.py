@@ -13,21 +13,21 @@ from services.image_services import apply_rename_results as _svc_apply_rename, a
 # Thin UI wrappers — delegate to service layer
 # ============================================================
 
-def _rename_images(input_dir, model, workers, dry_run, keep_original, rename_mode, custom_prompt, context_count, max_size, provider, thinking=True, progress=gr.Progress()):
+def _rename_images(input_dir, model, workers, dry_run, keep_original, rename_mode, custom_prompt, context_count, max_size, provider, thinking=True, include_subfolders=False, progress=gr.Progress()):
     _apply_provider(provider)
     result = _svc_rename(input_dir, model, workers, dry_run, keep_original, custom_prompt, context_count, max_size, thinking,
                          progress_callback=lambda c, t: progress(c / t, desc=f"重命名中 {c}/{t}"),
-                         rename_mode=rename_mode)
+                         rename_mode=rename_mode, include_subfolders=include_subfolders)
     config.save_state("rename", input_dir=input_dir, model=model or config.RENAME_MODEL,
                       workers=workers, dry_run=dry_run, keep_original=keep_original,
                       rename_mode=rename_mode, custom_prompt=custom_prompt, context_count=context_count,
-                      thinking=thinking)
+                      thinking=thinking, include_subfolders=include_subfolders)
     history.add_entry("图片重命名", input_dir, "重命名完成")
     return result
 
 
-def _classify_by_work(input_dir, dry_run, min_count):
-    return _svc_cls_work(input_dir, dry_run, int(min_count))
+def _classify_by_work(input_dir, dry_run, min_count, extract_subfolders=False):
+    return _svc_cls_work(input_dir, dry_run, int(min_count), extract_subfolders)
 
 
 def _ai_classify_images(input_dir, checked_cats, custom_cats, custom_desc, model, max_size, dry_run, provider, thinking=True, workers=4, group_similar=False, similarity_threshold=20, max_samples_per_group=4, progress=gr.Progress()):
@@ -326,14 +326,32 @@ def render_tab_image_tools(s, provider_info):
                                          info="强烈建议第一次使用时先试运行，看看效果")
                     rn_keep = gr.Checkbox(label="保留原文件名", value=s["rename"].get("keep_original", False),
                                           info="在描述后面附加原始文件名，适合文件名含时间戳等有用信息的情况")
+                    rn_sub = gr.Checkbox(label="📁 包含子文件夹", value=s["rename"].get("include_subfolders", False),
+                                         info="同时重命名子文件夹中的图片（最多 2 层），重命名后保持原位")
                     with gr.Row():
                         rn_btn = gr.Button("开始重命名", variant="primary")
                         rn_stop = gr.Button("停止", variant="stop")
                         rn_apply = gr.Button("✅ 应用试运行结果", variant="secondary")
                 with gr.Column(scale=3):
-                    rn_output = gr.Textbox(label="处理结果", lines=15, elem_classes="output-text",
+                    rn_output = gr.Textbox(label="处理结果", lines=12, elem_classes="output-text",
                                            placeholder="处理完成后这里会显示每张图片的新名字...")
-            rn_btn.click(_rename_images, [rn_input, rn_model, rn_workers, rn_dry, rn_keep, rn_mode, rn_custom_prompt, rn_ctx, rn_maxsz, provider_info, rn_thinking], [rn_output])
+
+                    # ---- Classify by work (inline, no gap) ----
+                    gr.Markdown("### 📁 按《》作品名自动分类")
+                    gr.Markdown("将已重命名的图片按文件名中的《作品名》自动归入子文件夹。",
+                                elem_classes="small-note")
+                    with gr.Row():
+                        rn_cls_dry = gr.Checkbox(label="试运行", value=False,
+                                                 info="先预览分类结果，不实际移动")
+                        rn_cls_extract = gr.Checkbox(label="📤 提取子文件夹", value=False,
+                                                     info="同时提取子文件夹（1-2层）中的图片到对应作品文件夹")
+                        rn_cls_min = gr.Slider(1, 20, value=3, step=1,
+                                               label="最少图片数",
+                                               info="该作品图片少于此数量则不移动")
+                        rn_cls_btn = gr.Button("开始分类", variant="secondary")
+                    rn_cls_output = gr.Textbox(label="分类结果", lines=10, elem_classes="output-text",
+                                               placeholder="点击后显示分类结果...")
+            rn_btn.click(_rename_images, [rn_input, rn_model, rn_workers, rn_dry, rn_keep, rn_mode, rn_custom_prompt, rn_ctx, rn_maxsz, provider_info, rn_thinking, rn_sub], [rn_output])
 
             def _stop_rename():
                 from image_tools.rename_images import request_stop
@@ -349,27 +367,14 @@ def render_tab_image_tools(s, provider_info):
             _bind_model_fetch(rn_fetch_btn, rn_model_type, rn_model, rn_fetch_st,
                               provider_info, config.RENAME_MODEL)
 
-            # ---- Classify by work ----
-            gr.Markdown("---")
-            gr.Markdown("### 📁 按《》作品名自动分类")
-            gr.Markdown("将已重命名的图片按文件名中的《作品名》自动归入子文件夹。")
-            with gr.Row():
-                rn_cls_dry = gr.Checkbox(label="试运行", value=False,
-                                         info="先预览分类结果，不实际移动")
-                rn_cls_min = gr.Slider(1, 20, value=3, step=1,
-                                       label="最少图片数",
-                                       info="该作品图片少于此数量则不移动")
-                rn_cls_btn = gr.Button("开始分类", variant="secondary")
-            rn_cls_output = gr.Textbox(label="分类结果", lines=8, elem_classes="output-text",
-                                       placeholder="点击后显示分类结果...")
-            rn_cls_btn.click(_classify_by_work, [rn_input, rn_cls_dry, rn_cls_min], [rn_cls_output])
+            rn_cls_btn.click(_classify_by_work, [rn_input, rn_cls_dry, rn_cls_min, rn_cls_extract], [rn_cls_output])
 
-        # ---- Sub-tab: Score & Classify ----
+        # ---- Sub-tab: Score & Classify (with inner tabs) ----
         with gr.Tab("🔍 评分与分类"):
             gr.Markdown(_make_title("AI 评分 + 自动分拣 — 多维度评估，高分/低分图片自动归类"))
             with gr.Accordion("📖 使用方法", open=False):
                 gr.Markdown("**评分：** ① 选择检测模式 → ② 填文件夹路径 → ③ 点「开始评分」→ 每张图生成 `.txt` 评分文件\n\n"
-                            "**分类：** ④ 评分完成后点「开始分类」→ 优质图片移至 `HighQuality/`，劣质/错误图片移至 `LowQuality_Errors/`\n\n"
+                            "**分类：** ④ 切换到「分拣」标签 → 设定规则 → 点「开始分类」→ 优质图片移至 `HighQuality/`\n\n"
                             "**七种检测模式：**\n"
                             "- 🎨 **AI 图片错误检测** — 检测 AI 生成图的肢体错乱、面部畸形、结构崩坏等问题\n"
                             "- 📸 **漫展摄影筛选** — 检测跑焦模糊、过曝欠曝等拍摄问题，筛选可出片的 Cosplay 照片\n"
@@ -378,167 +383,135 @@ def render_tab_image_tools(s, provider_info):
                             "- 🌄 **风景摄影评估** — 侧重光影层次、构图法则、色彩氛围\n"
                             "- 📄 **文档扫描清晰度** — 评估文字可读性、光照均匀度、畸变、完整度\n"
                             "- 🖌️ **绘画插图质量** — 评估造型比例、线条笔触、色彩光影、完成度\n\n"
-                            "> 💡 评分和分类是独立的两步，评完分可以先看分数再决定如何分类")
+                            "> 💡 评分和分拣是独立的两步，评完分可以先看分数再决定如何分类")
 
-            # ---- Score section ----
-            gr.Markdown("### ① 评分")
-            with gr.Row():
-                with gr.Column(scale=2):
-                    de_mode = gr.Dropdown(
-                        label="检测模式",
-                        choices=[
-                            ("🎨 AI 图片错误检测", "ai"),
-                            ("📸 漫展摄影筛选", "photo"),
-                            ("🖼️ 通用照片质量", "general"),
-                            ("👤 人像摄影评估", "portrait"),
-                            ("🌄 风景摄影评估", "landscape"),
-                            ("📄 文档扫描清晰度", "document"),
-                            ("🖌️ 绘画插图质量", "art"),
-                        ],
-                        value=s["score"].get("mode", "ai"),
-                        info="AI错误：找肢体畸形/崩坏 | 摄影：找跑焦/过曝 | 通用：综合评估 | 人像/风景/文档/绘画各有侧重"
-                    )
-                    de_input = gr.Textbox(label="图片文件夹",
-                                          value=s["score"].get("input_dir", str(config.DATA_DIR / "images")),
-                                          placeholder="粘贴图片所在文件夹的完整路径",
-                                          info="评分结果保存为同名 .txt 文件")
-                    de_model_type, de_model, de_fetch_btn, de_fetch_st, de_thinking = _make_model_selector(
-                        "视觉模型", s["score"].get("model", config.VISION_MODEL),
-                        "需要视觉模型。留空使用设置页默认值",
-                        thinking_default=s["score"].get("thinking", True))
-                    de_maxsz = gr.Slider(512, 4096, value=s["score"].get("max_size", config.IMAGE_MAX_SIZE), step=256,
-                                         label="图片最大边长（px）",
-                                         info="超过此值的图片会等比缩小，越小速度越快但精度可能下降")
-                    de_prompt = gr.Textbox(
-                        label="自定义评分提示词（留空使用默认）",
-                        value=s["score"].get("custom_prompt", ""),
-                        lines=6,
-                        placeholder="留空则使用当前模式的默认提示词。\n切换检测模式后请清空此框或重新填写对应模式的提示词。",
-                        info="留空 = 使用默认提示词"
-                    )
+            # State for structured score results (shared by gallery & CSV)
+            score_results_state = gr.State([])
+
+            with gr.Tabs():
+                # ============ Sub-tab: Score + Gallery ============
+                with gr.Tab("📊 评分"):
                     with gr.Row():
-                        de_score_btn = gr.Button("开始评分", variant="primary")
-                        de_score_stop = gr.Button("停止", variant="stop")
-                with gr.Column(scale=3):
-                    de_score_output = gr.Textbox(label="评分日志", lines=15, elem_classes="output-text",
-                                                 placeholder="评分完成后这里会显示每张图的分数和理由...")
+                        with gr.Column(scale=2):
+                            de_mode = gr.Dropdown(
+                                label="检测模式",
+                                choices=[
+                                    ("🎨 AI 图片错误检测", "ai"),
+                                    ("📸 漫展摄影筛选", "photo"),
+                                    ("🖼️ 通用照片质量", "general"),
+                                    ("👤 人像摄影评估", "portrait"),
+                                    ("🌄 风景摄影评估", "landscape"),
+                                    ("📄 文档扫描清晰度", "document"),
+                                    ("🖌️ 绘画插图质量", "art"),
+                                ],
+                                value=s["score"].get("mode", "ai"),
+                                info="AI错误：找肢体畸形/崩坏 | 摄影：找跑焦/过曝 | 通用：综合评估"
+                            )
+                            de_input = gr.Textbox(label="图片文件夹",
+                                                  value=s["score"].get("input_dir", str(config.DATA_DIR / "images")),
+                                                  placeholder="粘贴图片所在文件夹的完整路径",
+                                                  info="评分结果保存为同名 .txt 文件")
+                            with gr.Accordion("⚙️ 模型与高级设置", open=False):
+                                de_model_type, de_model, de_fetch_btn, de_fetch_st, de_thinking = _make_model_selector(
+                                    "视觉模型", s["score"].get("model", config.VISION_MODEL),
+                                    "需要视觉模型",
+                                    thinking_default=s["score"].get("thinking", True))
+                                de_maxsz = gr.Slider(512, 4096, value=s["score"].get("max_size", config.IMAGE_MAX_SIZE), step=256,
+                                                     label="图片最大边长（px）",
+                                                     info="超过此值的图片会等比缩小")
+                                de_prompt = gr.Textbox(
+                                    label="自定义评分提示词（留空使用默认）",
+                                    value=s["score"].get("custom_prompt", ""),
+                                    lines=4,
+                                    placeholder="留空则使用当前模式的默认提示词",
+                                    info="留空 = 使用默认提示词"
+                                )
+                            with gr.Row():
+                                de_score_btn = gr.Button("开始评分", variant="primary")
+                                de_score_stop = gr.Button("停止", variant="stop")
+                        with gr.Column(scale=3):
+                            de_score_output = gr.Textbox(label="评分日志", lines=14, elem_classes="output-text",
+                                                         placeholder="评分完成后这里会显示每张图的分数和理由...")
 
-            # ---- Classify section ----
-            gr.Markdown("### ② 分类（根据已有评分结果）")
-            with gr.Row():
-                with gr.Column(scale=2):
-                    de_cls_method = gr.Radio(
-                        label="分类方式",
-                        choices=[("按比例（前/后 N%）", "percent"), ("按分值（≥N 分 或 <M 分）", "threshold")],
-                        value=s["classify"].get("classify_method", "percent"),
-                        info="按比例：分数前N%入高分、后N%入低分 | 按分值：设定分数线"
-                    )
-                    with gr.Column():
-                        with gr.Row(visible=True) as de_percent_row:
-                            de_top = gr.Slider(1, 50, value=s["classify"].get("top_percent", int(config.TOP_PERCENT * 100)), step=1,
-                                               label="高分比例（%）",
-                                               info="评分前 N% 的图片移入 HighQuality")
-                            de_bottom = gr.Slider(1, 50, value=s["classify"].get("bottom_percent", int(config.BOTTOM_PERCENT * 100)), step=1,
-                                                  label="低分比例（%）",
-                                                  info="评分后 N% + 所有 ERR 图片移入 LowQuality_Errors")
-                        with gr.Row(visible=False) as de_threshold_row:
-                            de_min = gr.Slider(0.0, 10.0, value=s["classify"].get("min_score", 7.0), step=0.1,
-                                               label="高分线（≥）",
-                                               info="分数 ≥ 此值的图片移入 HighQuality")
-                            de_max = gr.Slider(0.0, 10.0, value=s["classify"].get("max_score", 4.0), step=0.1,
-                                               label="低分线（<）",
-                                               info="分数 < 此值的图片 + ERR 移入 LowQuality_Errors")
+                    # Gallery (below score row)
+                    gr.Markdown("### 评分结果画廊")
                     with gr.Row():
-                        de_cls_btn = gr.Button("开始分类", variant="primary")
-                with gr.Column(scale=3):
-                    de_cls_output = gr.Textbox(label="分类日志", lines=12, elem_classes="output-text",
-                                               placeholder="分类完成后这里会显示移动结果...")
+                        with gr.Column(scale=1):
+                            de_gallery_load_btn = gr.Button("📂 从文件夹加载评分结果", variant="secondary")
+                            de_csv_btn = gr.Button("📥 导出 CSV", variant="secondary")
+                            de_csv_file = gr.File(label="下载 CSV", visible=False)
+                            de_csv_status = gr.Textbox(label="导出状态", interactive=False, max_lines=2)
+                        with gr.Column(scale=4):
+                            de_gallery = gr.Gallery(
+                                label="评分结果（按分数从高到低排列）",
+                                columns=4, height=420, object_fit="contain",
+                                show_label=True, value=[],
+                            )
+                            de_gallery_info = gr.Textbox(label="画廊信息", interactive=False,
+                                                          value="评分完成后自动加载，也可点击左侧按钮从文件夹加载")
 
+                # ============ Sub-tab: Classify ============
+                with gr.Tab("📂 分拣"):
+                    with gr.Row():
+                        with gr.Column(scale=2):
+                            de_cls_method = gr.Radio(
+                                label="分类方式",
+                                choices=[("按比例（前/后 N%）", "percent"), ("按分值（≥N 分 或 <M 分）", "threshold")],
+                                value=s["classify"].get("classify_method", "percent"),
+                                info="按比例：分数前N%入高分、后N%入低分 | 按分值：设定分数线"
+                            )
+                            with gr.Row(visible=True) as de_percent_row:
+                                de_top = gr.Slider(1, 50, value=s["classify"].get("top_percent", int(config.TOP_PERCENT * 100)), step=1,
+                                                   label="高分比例（%）", info="评分前 N% 的图片移入 HighQuality")
+                                de_bottom = gr.Slider(1, 50, value=s["classify"].get("bottom_percent", int(config.BOTTOM_PERCENT * 100)), step=1,
+                                                      label="低分比例（%）", info="评分后 N% + ERR 移入 LowQuality_Errors")
+                            with gr.Row(visible=False) as de_threshold_row:
+                                de_min = gr.Slider(0.0, 10.0, value=s["classify"].get("min_score", 7.0), step=0.1,
+                                                   label="高分线（≥）", info="分数 ≥ 此值的图片移入 HighQuality")
+                                de_max = gr.Slider(0.0, 10.0, value=s["classify"].get("max_score", 4.0), step=0.1,
+                                                   label="低分线（<）", info="分数 < 此值的图片 + ERR 移入 LowQuality_Errors")
+                            de_cls_btn = gr.Button("开始分类", variant="primary")
+                        with gr.Column(scale=3):
+                            de_cls_output = gr.Textbox(label="分类日志", lines=14, elem_classes="output-text",
+                                                       placeholder="分类完成后这里会显示移动结果...")
+
+                # ============ Sub-tab: Manual Review ============
+                with gr.Tab("🔍 审核"):
+                    review_state = gr.State({"queue": [], "index": 0, "last_moved": None})
+
+                    with gr.Row():
+                        with gr.Column(scale=2):
+                            with gr.Row():
+                                review_input = gr.Textbox(
+                                    label="图片文件夹（已完成评分的）",
+                                    value=s["score"].get("input_dir", str(config.DATA_DIR / "images")),
+                                    placeholder="与评分使用同一目录", scale=3,
+                                )
+                                review_load_btn = gr.Button("📂 加载评分结果", variant="secondary", scale=1)
+                            review_image = gr.Image(label="当前图片", height=400, show_label=True, elem_classes="output-text")
+                            with gr.Row():
+                                review_progress = gr.Textbox(label="进度", value="未加载", interactive=False, scale=1)
+                        with gr.Column(scale=1):
+                            review_info = gr.Markdown("等待加载评分结果...", elem_classes="output-text")
+                            with gr.Row():
+                                review_high_btn = gr.Button("✅ 高质量", variant="primary", size="lg")
+                                review_low_btn = gr.Button("❌ 低质量", variant="stop", size="lg")
+                            with gr.Row():
+                                review_skip_btn = gr.Button("⏭️ 跳过", variant="secondary")
+                                review_undo_btn = gr.Button("↩️ 撤销上一步", variant="secondary")
+                            review_log = gr.Textbox(label="操作日志", lines=4, interactive=False, elem_classes="output-text")
+
+            # ---- Helper functions ----
             def _toggle_cls_method(method):
                 if method == "percent":
                     return gr.update(visible=True), gr.update(visible=False)
                 else:
                     return gr.update(visible=False), gr.update(visible=True)
 
-            de_cls_method.change(_toggle_cls_method, [de_cls_method], [de_percent_row, de_threshold_row])
-
             def _stop_scoring():
                 from image_tools.detect_ai_errors import request_stop
                 request_stop()
                 return "⏹️ 已请求停止..."
-
-            # State for structured score results (shared by gallery & CSV)
-            score_results_state = gr.State([])
-
-            de_score_stop.click(_stop_scoring, outputs=[de_score_output])
-            de_cls_btn.click(_classify_images, [de_input, de_cls_method, de_top, de_bottom, de_min, de_max], [de_cls_output])
-            _bind_model_fetch(de_fetch_btn, de_model_type, de_model, de_fetch_st,
-                              provider_info, config.VISION_MODEL)
-
-            # ---- Score visualization section ----
-            gr.Markdown("### ③ 评分结果画廊")
-            with gr.Row():
-                with gr.Column(scale=1):
-                    de_gallery_load_btn = gr.Button("📂 从文件夹加载评分结果", variant="secondary")
-                    de_csv_btn = gr.Button("📥 导出 CSV", variant="secondary")
-                    de_csv_file = gr.File(label="下载 CSV", visible=False)
-                    de_csv_status = gr.Textbox(label="导出状态", interactive=False, max_lines=2)
-                with gr.Column(scale=4):
-                    de_gallery = gr.Gallery(
-                        label="评分结果（按分数从高到低排列）",
-                        columns=4,
-                        height=420,
-                        object_fit="contain",
-                        show_label=True,
-                        value=[],
-                    )
-                    de_gallery_info = gr.Textbox(label="画廊信息", interactive=False,
-                                                  value="评分完成后自动加载，也可点击左侧按钮从文件夹加载")
-
-            # Wire up score button → log + state → gallery
-            de_score_btn.click(
-                _score_images,
-                [de_input, de_mode, de_prompt, de_model, de_maxsz, provider_info, de_thinking],
-                [de_score_output, score_results_state],
-            ).then(_populate_gallery, [score_results_state], [de_gallery, de_gallery_info])
-
-            de_gallery_load_btn.click(
-                _load_scored_to_gallery, [de_input],
-                [de_gallery, de_gallery_info, score_results_state],
-            )
-            de_csv_btn.click(_export_csv, [score_results_state], [de_csv_file, de_csv_status])
-
-            # ---- Manual review section ----
-            gr.Markdown("### ④ 手动审核（逐张查看评分并手动分类）")
-            gr.Markdown("加载评分结果后，逐张查看缩略图和点评，手动决定每张图片的分类。")
-
-            review_state = gr.State({"queue": [], "index": 0, "last_moved": None})
-
-            with gr.Row():
-                with gr.Column(scale=2):
-                    with gr.Row():
-                        review_input = gr.Textbox(
-                            label="图片文件夹（已完成评分的）",
-                            value=s["score"].get("input_dir", str(config.DATA_DIR / "images")),
-                            placeholder="与上方评分使用同一目录",
-                            scale=3
-                        )
-                        review_load_btn = gr.Button("📂 加载评分结果", variant="secondary", scale=1)
-
-                    review_image = gr.Image(label="当前图片", height=420, show_label=True,
-                                            elem_classes="output-text")
-                    with gr.Row():
-                        review_progress = gr.Textbox(label="进度", value="未加载", interactive=False, scale=1)
-
-                with gr.Column(scale=1):
-                    review_info = gr.Markdown("等待加载评分结果...", elem_classes="output-text")
-                    with gr.Row():
-                        review_high_btn = gr.Button("✅ 高质量", variant="primary", size="lg")
-                        review_low_btn = gr.Button("❌ 低质量", variant="stop", size="lg")
-                    with gr.Row():
-                        review_skip_btn = gr.Button("⏭️ 跳过", variant="secondary")
-                        review_undo_btn = gr.Button("↩️ 撤销上一步", variant="secondary")
-                    review_log = gr.Textbox(label="操作日志", lines=4, interactive=False, elem_classes="output-text")
 
             def _load_image_safe(path, max_side=1024):
                 from PIL import Image, ImageOps
@@ -613,9 +586,30 @@ def render_tab_image_tools(s, provider_info):
                 progress = f"第 {idx+1}/{len(queue)} 张"
                 return {"queue": queue, "index": idx, "last_moved": state.get("last_moved")}, _load_image_safe(next_item["path"]), info, progress, log
 
+            # ---- Event binding ----
+            de_cls_method.change(_toggle_cls_method, [de_cls_method], [de_percent_row, de_threshold_row])
+
+            de_score_stop.click(_stop_scoring, outputs=[de_score_output])
+            de_cls_btn.click(_classify_images, [de_input, de_cls_method, de_top, de_bottom, de_min, de_max], [de_cls_output])
+            _bind_model_fetch(de_fetch_btn, de_model_type, de_model, de_fetch_st,
+                              provider_info, config.VISION_MODEL)
+
+            # Score → gallery chain
+            de_score_btn.click(
+                _score_images,
+                [de_input, de_mode, de_prompt, de_model, de_maxsz, provider_info, de_thinking],
+                [de_score_output, score_results_state],
+            ).then(_populate_gallery, [score_results_state], [de_gallery, de_gallery_info])
+
+            de_gallery_load_btn.click(
+                _load_scored_to_gallery, [de_input],
+                [de_gallery, de_gallery_info, score_results_state],
+            )
+            de_csv_btn.click(_export_csv, [score_results_state], [de_csv_file, de_csv_status])
+
+            # Review
             review_load_btn.click(_on_review_load, [review_input],
                                   [review_state, review_image, review_info, review_progress, review_log])
-
             review_high_btn.click(lambda s, d: _review_action("high", s, d),
                                   [review_state, review_input],
                                   [review_state, review_image, review_info, review_progress, review_log])
