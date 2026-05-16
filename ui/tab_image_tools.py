@@ -13,15 +13,17 @@ from services.image_services import apply_rename_results as _svc_apply_rename, a
 # Thin UI wrappers — delegate to service layer
 # ============================================================
 
-def _rename_images(input_dir, model, workers, dry_run, keep_original, rename_mode, custom_prompt, context_count, max_size, provider, thinking=True, include_subfolders=False, progress=gr.Progress()):
+def _rename_images(input_dir, model, workers, dry_run, keep_original, rename_mode, custom_prompt, context_count, max_size, provider, thinking=True, include_subfolders=False, subfolder_mode="process_in_place", progress=gr.Progress()):
     _apply_provider(provider)
     result = _svc_rename(input_dir, model, workers, dry_run, keep_original, custom_prompt, context_count, max_size, thinking,
                          progress_callback=lambda c, t: progress(c / t, desc=f"重命名中 {c}/{t}"),
-                         rename_mode=rename_mode, include_subfolders=include_subfolders)
+                         rename_mode=rename_mode, include_subfolders=include_subfolders,
+                         subfolder_mode=subfolder_mode)
     config.save_state("rename", input_dir=input_dir, model=model or config.RENAME_MODEL,
                       workers=workers, dry_run=dry_run, keep_original=keep_original,
                       rename_mode=rename_mode, custom_prompt=custom_prompt, context_count=context_count,
-                      thinking=thinking, include_subfolders=include_subfolders)
+                      thinking=thinking, include_subfolders=include_subfolders,
+                      subfolder_mode=subfolder_mode)
     history.add_entry("图片重命名", input_dir, "重命名完成")
     return result
 
@@ -328,6 +330,16 @@ def render_tab_image_tools(s, provider_info):
                                           info="在描述后面附加原始文件名，适合文件名含时间戳等有用信息的情况")
                     rn_sub = gr.Checkbox(label="📁 包含子文件夹", value=s["rename"].get("include_subfolders", False),
                                          info="同时重命名子文件夹中的图片（最多 2 层），重命名后保持原位")
+                    rn_sub_mode = gr.Dropdown(
+                        label="子文件夹处理方式",
+                        choices=[
+                            ("原地处理（保留在子文件夹中）", "process_in_place"),
+                            ("提取到主文件夹再处理", "flatten_first"),
+                        ],
+                        value=s["rename"].get("subfolder_mode", "process_in_place"),
+                        info="原地处理：在各自子文件夹中重命名 | 提取到主文件夹：先移到主目录再重命名",
+                        visible=s["rename"].get("include_subfolders", False),
+                    )
                     with gr.Row():
                         rn_btn = gr.Button("开始重命名", variant="primary")
                         rn_stop = gr.Button("停止", variant="stop")
@@ -351,7 +363,12 @@ def render_tab_image_tools(s, provider_info):
                         rn_cls_btn = gr.Button("开始分类", variant="secondary")
                     rn_cls_output = gr.Textbox(label="分类结果", lines=10, elem_classes="output-text",
                                                placeholder="点击后显示分类结果...")
-            rn_btn.click(_rename_images, [rn_input, rn_model, rn_workers, rn_dry, rn_keep, rn_mode, rn_custom_prompt, rn_ctx, rn_maxsz, provider_info, rn_thinking, rn_sub], [rn_output])
+            def _on_sub_change(include_sub):
+                return gr.update(visible=include_sub)
+
+            rn_sub.change(_on_sub_change, [rn_sub], [rn_sub_mode])
+
+            rn_btn.click(_rename_images, [rn_input, rn_model, rn_workers, rn_dry, rn_keep, rn_mode, rn_custom_prompt, rn_ctx, rn_maxsz, provider_info, rn_thinking, rn_sub, rn_sub_mode], [rn_output])
 
             def _stop_rename():
                 from image_tools.rename_images import request_stop

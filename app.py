@@ -47,25 +47,6 @@ def build_ui():
     _prov_list, _prov_active = config.load_providers()
     _active_prov = config.get_active_provider()
 
-    # Auto-start local model if configured
-    from services.local_model import auto_start as _auto_start_local, get_status as _local_status
-    _local_msg = _auto_start_local()
-    if _local_msg:
-        logger.info(_local_msg)
-
-    # Inject local model as a provider if available
-    _local = _local_status()
-    if _local["available"] and _local["model_path"]:
-        _local_url = _local.get("base_url") or "http://127.0.0.1:8081/v1"
-        _exists = any(p["name"] == "本地模型" for p in _prov_list)
-        if not _exists:
-            _prov_list.append({"name": "本地模型", "base_url": _local_url, "api_key": "local"})
-        elif _local["running"]:
-            for p in _prov_list:
-                if p["name"] == "本地模型":
-                    p["base_url"] = _local_url
-                    break
-
     with gr.Blocks(title="LocalAITools") as app:
         # ---- Top bar: title + provider + buttons ----
         prov = render_provider_bar(_active_prov, _prov_list, _prov_active)
@@ -133,25 +114,36 @@ def build_ui():
             t_bench["bm_url"], t_bench["bm_key"],
         ]
 
+        _prov_save_outputs = [
+            prov["prov_msg"], prov["providers_state"], prov["provider_select"],
+            prov["prov_info_text"], prov["provider_info"],
+            prov["llama_start_btn"], prov["llama_stop_btn"], prov["llama_status_msg"],
+        ]
+        _prov_change_outputs = [
+            prov["prov_info_text"], prov["provider_info"], prov["providers_state"],
+            prov["llama_start_btn"], prov["llama_stop_btn"], prov["llama_status_msg"],
+        ]
+
         prov["prov_save_btn"].click(
             prov["_on_prov_save_and_refresh"],
             inputs=[prov["prov_edit_mode"], prov["prov_old_name"], prov["prov_name"],
-                    prov["prov_url"], prov["prov_key"], prov["providers_state"]],
-            outputs=[prov["prov_msg"], prov["providers_state"], prov["provider_select"],
-                     prov["prov_info_text"], prov["provider_info"]],
+                    prov["prov_type"], prov["prov_url"], prov["prov_key"],
+                    prov["prov_server_path"], prov["prov_model_path"], prov["prov_mmproj_path"],
+                    prov["prov_ctx_size"], prov["prov_port"], prov["prov_expert_kv"],
+                    prov["prov_reasoning"], prov["providers_state"]],
+            outputs=_prov_save_outputs,
         ).then(_refresh_all_models, inputs=[prov["provider_info"]], outputs=_model_outputs)
 
         prov["prov_del_btn"].click(
             prov["_on_prov_delete_and_refresh"],
             inputs=[prov["providers_state"]],
-            outputs=[prov["prov_msg"], prov["providers_state"], prov["provider_select"],
-                     prov["prov_info_text"], prov["provider_info"]],
+            outputs=_prov_save_outputs,
         ).then(_refresh_all_models, inputs=[prov["provider_info"]], outputs=_model_outputs)
 
         prov["provider_select"].change(
             prov["_on_provider_change"],
             inputs=[prov["provider_select"], prov["providers_state"]],
-            outputs=[prov["prov_info_text"], prov["provider_info"], prov["providers_state"]],
+            outputs=_prov_change_outputs,
         ).then(_refresh_all_models, inputs=[prov["provider_info"]], outputs=_model_outputs)
 
         # ---- Chat tab: refresh conversation list on select (in-memory only, no disk I/O) ----

@@ -421,56 +421,6 @@ def render_tab_settings():
     </script>
     """)
 
-    # ---- Local model ----
-    gr.Markdown("---")
-    gr.Markdown(_make_title("🏠 内置本地模型"))
-    gr.Markdown("无需安装 LM Studio 等外部服务，直接在应用内运行小模型。适合轻量任务（分类、重命名等）。")
-
-    from services.local_model import get_status, start_server_simple, is_available, get_model_path
-
-    status = get_status()
-    _models_dir = Path(__file__).parent.parent / "models"
-
-    if not status["available"]:
-        gr.Markdown(
-            "**状态：** ❌ 未安装 `llama-cpp-python`\n\n"
-            "安装命令：\n```\npip install llama-cpp-python\n```\n"
-            "> 安装后重启应用即可使用"
-        )
-    elif not status["model_path"]:
-        gr.Markdown(
-            f"**状态：** ⚠️ 已安装 llama-cpp-python，但未找到模型文件\n\n"
-            f"请将 `.gguf` 模型文件放入 `{_models_dir}` 目录\n\n"
-            f"推荐下载：\n"
-            f"- [Qwen3.5-0.6B](https://huggingface.co/Qwen/Qwen3.5-0.6B-GGUF) (~400MB，速度快)\n"
-            f"- [Qwen3.5-1.7B](https://huggingface.co/Qwen/Qwen3.5-1.7B-GGUF) (~1GB，更智能)"
-        )
-    else:
-        _model_name = Path(status["model_path"]).name
-        _model_size = Path(status["model_path"]).stat().st_size / (1024*1024)
-        _status_text = "🟢 运行中" if status["running"] else "⚪ 未启动"
-        gr.Markdown(
-            f"**状态：** {_status_text}\n\n"
-            f"**模型：** `{_model_name}` ({_model_size:.0f} MB)\n\n"
-            f"**地址：** `{status['base_url'] or '未启动'}`"
-        )
-        with gr.Row():
-            local_start_btn = gr.Button("▶️ 启动本地模型", variant="primary", scale=1)
-            local_stop_btn = gr.Button("⏹ 停止", variant="stop", scale=0, min_width=80)
-        local_status_msg = gr.Textbox(label="", interactive=False, container=False,
-                                       show_label=False, max_lines=3)
-
-        def _on_start_local():
-            result = start_server_simple()
-            return result
-
-        def _on_stop_local():
-            from services.local_model import _server_running, _server_port
-            return "⚠️ 本地模型随应用关闭而停止（重启应用即可）"
-
-        local_start_btn.click(_on_start_local, outputs=[local_status_msg])
-        local_stop_btn.click(_on_stop_local, outputs=[local_status_msg])
-
     # ---- API connection test ----
     gr.Markdown("---")
     gr.Markdown(_make_title("🔗 API 连接测试"))

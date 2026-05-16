@@ -27,33 +27,34 @@ def render_tab_welcome(app):
 
     gr.Markdown("""本工具需要连接一个 AI 模型服务才能工作。推荐以下方式（任选一种）：
 
-**⭐ 方式一：云端 API（最简单，免下载模型，按量付费）**
+**⭐ 方式一：llama.cpp 本地推理（推荐，免费，性能最好）**
+1. 下载 [llama.cpp](https://github.com/ggml-org/llama.cpp/releases) — 选 `llama-bxxx-bin-win-vulkan-x64.zip`（Vulkan GPU 加速）
+2. 解压到任意目录，如 `D:\\llama\\llama-b9116-bin-win-vulkan-x64\\`
+3. 下载 GGUF 模型（如 [Qwen3.6-27B](https://huggingface.co) 约 16GB）
+4. 在本应用顶栏点 **添加** → 类型选 **llama_server** → 填安装目录 → 点 **🔍 扫描模型** → 选模型 → 保存
+5. 顶栏选该供应商 → 点 **▶️ 启动服务**，等 10-60 秒即可
+
+**⭐⭐ 方式二：云端 API（最简单，免下载模型，按量付费）**
 1. [硅基流动 SiliconFlow](https://cloud.siliconflow.cn/) — 注册送额度，支持 Qwen 系列
 2. [DeepSeek 开放平台](https://platform.deepseek.com/) — 便宜好用
 3. [阿里云百炼](https://bailian.console.aliyun.com/) — Qwen 官方 API
 4. 注册后在后台创建 API Key，填到下方设置页的 API 地址和密钥即可
 
-**⭐⭐ 方式二：LM Studio（推荐本地运行，免费）**
+**⭐⭐⭐ 方式三：LM Studio（本地运行，图形界面）**
 1. 下载安装 [LM Studio](https://lmstudio.ai/)（支持 Windows / Mac）
 2. 打开 LM Studio，在搜索框搜 `qwen3` 或 `qwen3.6`
 3. 下载一个视觉模型（如 `qwen3.6-27b`，约 16 GB）
 4. 切换到 **Local Server** 标签页，点击 **Start Server**
 5. 默认地址就是 `http://localhost:1234/v1`，无需修改
 
-**⭐⭐⭐ 方式三：Ollama（免费，需命令行基础）**
+**⭐⭐⭐ 方式四：Ollama（免费，需命令行基础）**
 ```bash
 ollama serve          # 启动服务
 ollama pull qwen3     # 下载模型
 ```
 默认地址 `http://localhost:11434/v1`
 
-**⭐⭐⭐ 方式四：vLLM / SGLang / Xinference（自建推理服务，适合多人共享）**
-- [vLLM](https://github.com/vllm-project/vllm) — 生产级推理引擎，支持 PagedAttention，吞吐量高
-- [SGLang](https://github.com/sgl-project/sglang) — 高效推理框架，结构化生成能力强
-- [Xinference](https://github.com/xorbitsai/inference) — 一键部署，支持 Web UI 管理模型
-- 部署后 OpenAI 兼容端点填到设置页即可使用
-
-> 💡 **简单总结：** 不想折腾 → 云端 API；有显卡想省钱 → LM Studio；技术党想折腾 → Ollama/vLLM
+> 💡 **简单总结：** 本地跑模型首选 **llama.cpp**；不想折腾 → 云端 API；技术党 → Ollama / vLLM
 """)
 
     gr.Markdown("---")
@@ -65,7 +66,7 @@ ollama pull qwen3     # 下载模型
 - **API 密钥**：本地服务填任意值（如 `lm-studio`），云端 API 填真实的 Key
 - 填好后点 **💾 保存设置**，然后点 **🔗 测试连接** 确认能连上
 
-> 💡 云端 API 需填写平台提供的地址和 Key；本地服务一般无需修改地址。""")
+> 💡 使用 **llama.cpp** 供应商时无需手动填写地址，启动服务后自动配置。""")
 
     gr.Markdown("---")
 

@@ -61,21 +61,46 @@ def rename_images(
     progress_callback: Callable[[int, int], None] = None,
     rename_mode: str = "general",
     include_subfolders: bool = False,
+    subfolder_mode: str = "process_in_place",
 ) -> str:
     """Rename images with AI-generated descriptions. Returns log text.
 
-    The caller (UI layer) is responsible for calling ``_apply_provider()``
-    and setting ``os.environ["ENABLE_THINKING"]`` before invoking this.
+    subfolder_mode: "process_in_place" (default) or "flatten_first"
+        "flatten_first": move subfolder images to main directory before renaming.
     """
     os.environ["ENABLE_THINKING"] = "true" if thinking else "false"
-    logger.info(f"[图片重命名] 目录={input_dir} 模型={model} 线程={workers} 保留原名={keep_original} max_size={max_size} 子文件夹={include_subfolders}")
+    logger.info(f"[图片重命名] 目录={input_dir} 模型={model} 线程={workers} 保留原名={keep_original} max_size={max_size} 子文件夹={include_subfolders} subfolder_mode={subfolder_mode}")
     from image_tools.rename_images import process_one_image, get_shared_llm, _stop_flag
 
     input_path = Path(input_dir)
     if not input_path.is_dir():
         return "❌ 请输入有效的文件夹路径"
 
-    images = _find_images(input_path, include_subfolders)
+    # Flatten subfolders if requested
+    flatten_log = []
+    if include_subfolders and subfolder_mode == "flatten_first":
+        pre_images = _find_images(input_path, include_subfolders=True)
+        moved = 0
+        for img in pre_images:
+            if img.parent == input_path:
+                continue
+            dst = input_path / img.name
+            counter = 1
+            while dst.exists():
+                dst = input_path / f"{img.stem}_{counter}{img.suffix}"
+                counter += 1
+            try:
+                shutil.move(str(img), str(dst))
+                moved += 1
+            except Exception as e:
+                flatten_log.append(f"⚠️ 移动失败: {img.name} - {e}")
+        if moved:
+            flatten_log.insert(0, f"📂 已将 {moved} 张子文件夹图片移至主目录")
+        # After flattening, only scan main directory
+        images = _find_images(input_path, include_subfolders=False)
+        logger.info(f"[图片重命名] 子文件夹提取完成，移动 {moved} 张，重新扫描到 {len(images)} 张")
+    else:
+        images = _find_images(input_path, include_subfolders)
 
     if not images:
         return "📂 未找到图片文件"
@@ -137,9 +162,21 @@ def rename_images(
         except Exception as e:
             results.append(f"\n⚠️ 保存试运行结果失败: {e}")
 
+    lines = []
+    if flatten_log:
+        lines.append("=" * 40)
+        lines.append("📂 子文件夹提取")
+        lines.append("=" * 40)
+        lines.extend(flatten_log)
+        lines.append("")
+
     if _stop_flag.is_set():
-        return f"已停止：已完成 {completed}/{total} 张图片\n\n" + "\n".join(results)
-    return f"处理完成：{total} 张图片\n\n" + "\n".join(results)
+        lines.append(f"已停止：已完成 {completed}/{total} 张图片")
+    else:
+        lines.append(f"处理完成：{total} 张图片")
+    lines.append("")
+    lines.extend(results)
+    return "\n".join(lines)
 
 
 def apply_rename_results(input_dir: str = None, keep_original: bool = False) -> str:

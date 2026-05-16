@@ -70,11 +70,6 @@ TARGET_LANG = os.getenv("TARGET_LANG", "English")
 # ==================== 更新设置 ====================
 AUTO_UPDATE = os.getenv("AUTO_UPDATE", "false").lower() == "true"
 
-# ==================== 本地模型 ====================
-LOCAL_MODEL_ENABLED = os.getenv("LOCAL_MODEL_ENABLED", "false").lower() == "true"
-LOCAL_MODEL_PATH = os.getenv("LOCAL_MODEL_PATH", "")
-LOCAL_MODEL_CTX = int(os.getenv("LOCAL_MODEL_CTX", "4096"))
-
 # ==================== 思考模式 ====================
 # 是否启用模型的思考/推理模式（Thinking/Reasoning）。
 # 关闭后模型直接输出结果，速度更快，适合简单任务。
@@ -157,6 +152,18 @@ def clear_state():
 
 
 # ==================== 供应商管理 ====================
+def _normalize_provider(p: dict) -> dict:
+    """Ensure a provider dict has all required fields with defaults."""
+    p = dict(p)  # shallow copy
+    if "type" not in p:
+        p["type"] = "openai_compatible"
+    if "base_url" not in p:
+        p["base_url"] = ""
+    if "api_key" not in p:
+        p["api_key"] = ""
+    return p
+
+
 def load_providers():
     """加载供应商列表和当前活动供应商名。首次使用时从 .env 创建默认供应商。"""
     state = {}
@@ -171,7 +178,7 @@ def load_providers():
         # 首次：从当前 .env 配置创建默认供应商
         default = {
             "list": [
-                {"name": "默认", "base_url": OPENAI_BASE_URL, "api_key": OPENAI_API_KEY}
+                {"name": "默认", "type": "openai_compatible", "base_url": OPENAI_BASE_URL, "api_key": OPENAI_API_KEY}
             ],
             "active": "默认"
         }
@@ -182,7 +189,9 @@ def load_providers():
             pass
         return default["list"], default["active"]
 
-    return providers["list"], providers.get("active", providers["list"][0]["name"])
+    # Normalize all providers for backward compatibility
+    prov_list = [_normalize_provider(p) for p in providers["list"]]
+    return prov_list, providers.get("active", prov_list[0]["name"])
 
 
 def save_providers(provider_list, active_name):
